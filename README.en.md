@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/icon-clash-master.png" width="100" alt="Clash Master Logo" style="margin-bottom: 16px;">
+  <img src="./assets/icon-clash-master.png" width="200" alt="Clash Master Logo" style="margin-bottom: 16px;">
   <br>
   <b style="font-size: 32px;">Clash Master</b>
 </p>
@@ -34,39 +34,38 @@ Throughout the entire development process, I didn't write a single line of code 
 
 ## 📋 Table of Contents
 
-- [](#)
-  - [🤔 Preface](#-preface)
-  - [📋 Table of Contents](#-table-of-contents)
-  - [✨ Features](#-features)
-  - [🚀 Quick Start](#-quick-start)
-    - [Option 1: Docker Compose (Recommended)](#option-1-docker-compose-recommended)
-    - [Option 2: Docker Run](#option-2-docker-run)
-    - [Option 3: Source Code](#option-3-source-code)
-  - [📖 First Use](#-first-use)
-  - [🐳 Docker Configuration](#-docker-configuration)
-    - [Ports](#ports)
-    - [Data Persistence](#data-persistence)
-    - [Custom Ports](#custom-ports)
-    - [Update to Latest](#update-to-latest)
-  - [📁 Project Structure](#-project-structure)
-  - [🔧 FAQ](#-faq)
-  - [🛠️ Tech Stack](#️-tech-stack)
-  - [🤝 Contributing](#-contributing)
-  - [📄 License](#-license)
-  - [⭐ Star History](#-star-history)
+- [🤔 Preface](#-preface)
+- [📋 Table of Contents](#-table-of-contents)
+- [✨ Features](#-features)
+- [🚀 Quick Start](#-quick-start)
+  - [Option 1: Docker Compose (Recommended)](#option-1-docker-compose-recommended)
+  - [Option 2: Docker Run](#option-2-docker-run)
+  - [Option 3: Source Code](#option-3-source-code)
+- [📖 First Use](#-first-use)
+- [🐳 Docker Configuration](#-docker-configuration)
+  - [Ports](#ports)
+  - [Data Persistence](#data-persistence)
+  - [Custom Ports](#custom-ports)
+  - [Update to Latest](#update-to-latest)
+- [📁 Project Structure](#-project-structure)
+- [🔧 FAQ](#-faq)
+- [🛠️ Tech Stack](#️-tech-stack)
+- [🤝 Contributing](#-contributing)
+- [📄 License](#-license)
+- [⭐ Star History](#-star-history)
 
 ## ✨ Features
 
-| Feature | Description |
-| ------- | ----------- |
-| 📊 **Real-time Monitoring** | WebSocket real-time collection with millisecond latency |
-| 📈 **Trend Analysis** | Multi-dimensional traffic trends: 30min / 1h / 24h |
-| 🌐 **Domain Analysis** | View traffic, associated IPs, and connection count per domain |
-| 🗺️ **IP Analysis** | ASN, geo-location, and associated domain display |
-| 🚀 **Proxy Statistics** | Traffic distribution and connection count per proxy node |
-| 🌙 **Dark Mode** | Light / Dark / System theme support |
-| 🌍 **i18n Support** | English / Chinese seamless switching |
-| 🔄 **Multi-Backend** | Monitor multiple OpenClash backend instances simultaneously |
+| Feature                     | Description                                                   |
+| --------------------------- | ------------------------------------------------------------- |
+| 📊 **Real-time Monitoring** | WebSocket real-time collection with millisecond latency       |
+| 📈 **Trend Analysis**       | Multi-dimensional traffic trends: 30min / 1h / 24h            |
+| 🌐 **Domain Analysis**      | View traffic, associated IPs, and connection count per domain |
+| 🗺️ **IP Analysis**          | ASN, geo-location, and associated domain display              |
+| 🚀 **Proxy Statistics**     | Traffic distribution and connection count per proxy node      |
+| 🌙 **Dark Mode**            | Light / Dark / System theme support                           |
+| 🌍 **i18n Support**         | English / Chinese seamless switching                          |
+| 🔄 **Multi-Backend**        | Monitor multiple OpenClash backend instances simultaneously   |
 
 ## 🚀 Quick Start
 
@@ -127,6 +126,8 @@ pnpm install
 
 ## 📖 First Use
 
+![First Use](./assets/clash-master-setup.png)
+
 1. Open <http://localhost:3000>
 2. The **Backend Configuration** dialog will appear on first visit
 3. Fill in your OpenClash connection info:
@@ -143,11 +144,11 @@ pnpm install
 
 ### Ports
 
-| Port | Purpose | Required | Description |
-|:----:|:-------:|:--------:|:------------|
-| 3000 | Web UI | ✅ | Frontend access port |
-| 3001 | API | ✅ | REST API port |
-| 3002 | WebSocket | ✅ | Real-time data transmission |
+| Port |  Purpose  | Required | Description                 |
+| :--: | :-------: | :------: | :-------------------------- |
+| 3000 |  Web UI   |    ✅    | Frontend access port        |
+| 3001 |    API    |    ✅    | REST API port               |
+| 3002 | WebSocket |    ✅    | Real-time data transmission |
 
 ### Data Persistence
 
@@ -166,7 +167,7 @@ Create `docker-compose.override.yml` to customize ports:
 services:
   clash-master:
     ports:
-      - "8080:3000"  # Map 3000 to host's 8080
+      - "8080:3000" # Map 3000 to host's 8080
 ```
 
 ### Update to Latest

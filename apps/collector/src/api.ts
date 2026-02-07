@@ -516,6 +516,36 @@ export class APIServer {
       return { message: 'Database vacuumed successfully' };
     });
 
+    // Get retention configuration
+    app.get('/api/db/retention', async () => {
+      return this.db.getRetentionConfig();
+    });
+
+    // Update retention configuration
+    app.put('/api/db/retention', async (request, reply) => {
+      const { connectionLogsDays, hourlyStatsDays, autoCleanup } = request.body as {
+        connectionLogsDays?: number;
+        hourlyStatsDays?: number;
+        autoCleanup?: boolean;
+      };
+
+      // Validate input
+      if (connectionLogsDays !== undefined && (connectionLogsDays < 1 || connectionLogsDays > 90)) {
+        return reply.status(400).send({ error: 'connectionLogsDays must be between 1 and 90' });
+      }
+      if (hourlyStatsDays !== undefined && (hourlyStatsDays < 7 || hourlyStatsDays > 365)) {
+        return reply.status(400).send({ error: 'hourlyStatsDays must be between 7 and 365' });
+      }
+
+      const newConfig = this.db.updateRetentionConfig({
+        connectionLogsDays,
+        hourlyStatsDays,
+        autoCleanup,
+      });
+
+      return { message: 'Retention configuration updated', config: newConfig };
+    });
+
     await app.listen({ port: this.port, host: '0.0.0.0' });
     console.log(`[API] Server running at http://localhost:${this.port}`);
 

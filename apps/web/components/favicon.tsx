@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getFaviconUrl, useSettings, type FaviconProvider } from "@/lib/settings";
 
 interface FaviconProps {
   domain: string;
@@ -22,41 +23,48 @@ const iconSizeMap = {
   lg: "w-6 h-6",
 };
 
-export function Favicon({ domain, size = "md", className }: FaviconProps) {
-  const [error, setError] = useState(false);
-  const [loading, setLoading] = useState(true);
+// Generate gradient background based on domain
+function getGradient(domain: string): string[] {
+  const colors = [
+    ["from-blue-500", "to-cyan-400"],
+    ["from-purple-500", "to-pink-400"],
+    ["from-emerald-500", "to-teal-400"],
+    ["from-orange-500", "to-amber-400"],
+    ["from-rose-500", "to-red-400"],
+    ["from-indigo-500", "to-violet-400"],
+  ];
+  let hash = 0;
+  for (let i = 0; i < domain.length; i++) {
+    hash = domain.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
+}
 
-  // Clean domain (remove protocol, path, etc.)
-  const cleanDomain = domain
+// Clean domain (remove protocol, path, etc.)
+function cleanDomain(domain: string): string {
+  return domain
     .replace(/^https?:\/\//, "")
     .replace(/^www\./, "")
     .split("/")[0];
+}
 
-  // Use Google's favicon service
-  const faviconUrl = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(
-    cleanDomain
-  )}&sz=128`;
+export function Favicon({ domain, size = "md", className }: FaviconProps) {
+  const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const { settings } = useSettings();
 
-  // Generate gradient background based on domain
-  const getGradient = (domain: string) => {
-    const colors = [
-      ["from-blue-500", "to-cyan-400"],
-      ["from-purple-500", "to-pink-400"],
-      ["from-emerald-500", "to-teal-400"],
-      ["from-orange-500", "to-amber-400"],
-      ["from-rose-500", "to-red-400"],
-      ["from-indigo-500", "to-violet-400"],
-    ];
-    let hash = 0;
-    for (let i = 0; i < domain.length; i++) {
-      hash = domain.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    return colors[Math.abs(hash) % colors.length];
-  };
+  const cleanedDomain = cleanDomain(domain);
+  const gradient = getGradient(cleanedDomain);
 
-  const gradient = getGradient(cleanDomain);
+  const faviconUrl = getFaviconUrl(cleanedDomain, settings.faviconProvider);
 
-  if (error || !cleanDomain) {
+  // Reset error state when provider changes
+  useEffect(() => {
+    setError(false);
+    setLoading(true);
+  }, [settings.faviconProvider, domain]);
+
+  if (error || !cleanedDomain) {
     return (
       <div
         className={cn(
@@ -88,8 +96,9 @@ export function Favicon({ domain, size = "md", className }: FaviconProps) {
         />
       )}
       <img
+        key={faviconUrl} // Force re-render when URL changes
         src={faviconUrl}
-        alt={cleanDomain}
+        alt={cleanedDomain}
         className={cn(
           "w-full h-full object-cover p-0.5",
           loading ? "opacity-0" : "opacity-100"
@@ -103,30 +112,9 @@ export function Favicon({ domain, size = "md", className }: FaviconProps) {
 
 // Fallback component for when favicon fails
 export function DomainInitial({ domain, size = "md", className }: FaviconProps) {
-  const cleanDomain = domain
-    .replace(/^https?:\/\//, "")
-    .replace(/^www\./, "")
-    .split("/")[0];
-
-  const initial = cleanDomain.charAt(0).toUpperCase();
-
-  const getGradient = (domain: string) => {
-    const colors = [
-      ["from-blue-500", "to-cyan-400"],
-      ["from-purple-500", "to-pink-400"],
-      ["from-emerald-500", "to-teal-400"],
-      ["from-orange-500", "to-amber-400"],
-      ["from-rose-500", "to-red-400"],
-      ["from-indigo-500", "to-violet-400"],
-    ];
-    let hash = 0;
-    for (let i = 0; i < domain.length; i++) {
-      hash = domain.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    return colors[Math.abs(hash) % colors.length];
-  };
-
-  const gradient = getGradient(cleanDomain);
+  const cleaned = cleanDomain(domain);
+  const initial = cleaned.charAt(0).toUpperCase();
+  const gradient = getGradient(cleaned);
 
   return (
     <div

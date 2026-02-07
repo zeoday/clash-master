@@ -5,6 +5,7 @@ import { Globe, ArrowRight, BarChart3, Link2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { cn, formatBytes, formatNumber } from "@/lib/utils";
+import { useSettings, getFaviconUrl } from "@/lib/settings";
 import type { DomainStats } from "@clashmaster/shared";
 
 interface TopDomainsSimpleProps {
@@ -12,10 +13,6 @@ interface TopDomainsSimpleProps {
   sortBy: "traffic" | "connections";
   onSortChange: (mode: "traffic" | "connections") => void;
   onViewAll?: () => void;
-}
-
-function getFaviconUrl(domain: string): string {
-  return `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
 }
 
 function getInitials(domain: string): string {
@@ -29,6 +26,7 @@ export const TopDomainsSimple = React.memo(function TopDomainsSimple({
   onViewAll,
 }: TopDomainsSimpleProps) {
   const t = useTranslations("topDomains");
+  const { settings } = useSettings();
 
   const sortedDomains = useMemo(() => {
     if (!domains?.length) return [];
@@ -47,6 +45,10 @@ export const TopDomainsSimple = React.memo(function TopDomainsSimple({
     return sorted.slice(0, 6);
   }, [domains, sortBy]);
 
+  // Get favicon URL using current provider
+  const getFaviconForDomain = (domain: string) => {
+    return getFaviconUrl(domain, settings.faviconProvider);
+  };
 
   return (
     <div className="space-y-3 h-full flex flex-col">
@@ -118,7 +120,7 @@ export const TopDomainsSimple = React.memo(function TopDomainsSimple({
                 {/* Favicon */}
                 <div className="w-5 h-5 rounded bg-muted flex items-center justify-center shrink-0 overflow-hidden">
                   <img
-                    src={getFaviconUrl(domain.domain)}
+                    src={getFaviconForDomain(domain.domain)}
                     alt=""
                     className="w-4 h-4"
                     loading="lazy"

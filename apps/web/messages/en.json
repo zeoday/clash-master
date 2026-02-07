@@ -206,6 +206,8 @@
     "viewOnGitHub": "View on GitHub"
   },
   "common": {
+    "daysSuffix": "d ago",
+    "days": "days",
     "search": "Search",
     "cancel": "Cancel",
     "close": "Close",
@@ -285,8 +287,28 @@
     "collect": "Collect",
     "setDisplay": "Set Display",
     "selectBackend": "Select Backend",
-    "manageBackends": "Manage Backends",
+    "manageBackends": "Settings",
     "firstBackendAutoActive": "First backend automatically set as active",
-    "verificationFailed": "Backend verification failed. Please check the host address and token."
+    "verificationFailed": "Backend verification failed. Please check the host address and token.",
+    "preferencesTab": "Preferences",
+    "faviconProvider": "Favicon Provider",
+    "faviconProviderDescription": "Choose the service used to display website icons in the domain list. favicon.im is recommended for users in China.",
+    "faviconGoogle": "Google Favicon",
+    "faviconIm": "favicon.im (Recommended for China)",
+    "dataRetention": "Data Storage Time",
+    "dataRetentionDescription": "Control how long detailed connection records are kept. Domain and IP statistics are always preserved. Longer storage uses more disk space but allows troubleshooting older issues.",
+    "retentionPresetMinimal": "Minimal",
+    "retentionPresetMinimalDesc": "Save disk space, keep 3 days of details",
+    "retentionPresetStandard": "Standard",
+    "retentionPresetStandardDesc": "Balanced, keep 7 days of details",
+    "retentionPresetExtended": "Extended",
+    "retentionPresetExtendedDesc": "Full history, keep 30 days of details",
+    "retentionPresetMaximum": "Maximum",
+    "retentionPresetMaximumDesc": "Maximum retention, keep 90 days of details",
+    "retentionCustom": "Custom",
+    "retentionCustomDesc": "Set your own storage period (max 90 days)",
+    "retentionDays": "{days} days",
+    "retentionUpdated": "Storage settings saved",
+    "retentionUpdateFailed": "Failed to save settings"
   }
 }

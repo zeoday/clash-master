@@ -2,6 +2,12 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import type { Connection, DomainStats, IPStats, HourlyStats, DailyStats, ProxyStats, RuleStats, ProxyTrafficStats } from '@clashmaster/shared';
+// Retention config stored in database (doesn't include cleanupInterval)
+interface DatabaseRetentionConfig {
+  connectionLogsDays: number;
+  hourlyStatsDays: number;
+  autoCleanup: boolean;
+}
 
 export interface TrafficUpdate {
   domain: string;
@@ -214,6 +220,23 @@ export class StatsDatabase {
 
     // Create unique index on name
     this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_backend_configs_name ON backend_configs(name);`);
+
+    // App configuration - stores app-level settings like retention policy
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS app_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Insert default retention config if not exists
+    this.db.exec(`
+      INSERT OR IGNORE INTO app_config (key, value) VALUES 
+        ('retention.connection_logs_days', '7'),
+        ('retention.hourly_stats_days', '30'),
+        ('retention.auto_cleanup', '1');
+    `);
 
     // Migrate existing data if needed (from single-backend schema)
     this.migrateIfNeeded();
@@ -628,6 +651,298 @@ export class StatsDatabase {
     transaction();
   }
 
+  // Batch update traffic stats - processes multiple updates in a single transaction
+  batchUpdateTrafficStats(backendId: number, updates: TrafficUpdate[]) {
+    if (updates.length === 0) return;
+
+    const now = new Date();
+    const timestamp = now.toISOString();
+    const hour = timestamp.slice(0, 13) + ':00:00';
+
+    // Aggregate updates by domain, ip, chain to reduce UPSERT conflicts
+    const domainMap = new Map<string, TrafficUpdate & { count: number }>();
+    const ipMap = new Map<string, TrafficUpdate & { count: number }>();
+    const chainMap = new Map<string, { chains: string[]; upload: number; download: number; count: number }>();
+    const ruleProxyMap = new Map<string, { rule: string; proxy: string; count: number }>();
+    const hourlyMap = new Map<string, { upload: number; download: number; connections: number }>();
+
+    for (const update of updates) {
+      if (update.upload === 0 && update.download === 0) continue;
+
+      const initialRule = update.chains.length > 0 ? update.chains[update.chains.length - 1] : 'DIRECT';
+      const finalProxy = update.chains.length > 0 ? update.chains[0] : 'DIRECT';
+
+      // Aggregate domain stats
+      if (update.domain) {
+        const domainKey = `${update.domain}:${update.ip}:${update.chain}`;
+        const existing = domainMap.get(domainKey);
+        if (existing) {
+          existing.upload += update.upload;
+          existing.download += update.download;
+          existing.count++;
+        } else {
+          domainMap.set(domainKey, { ...update, count: 1 });
+        }
+      }
+
+      // Aggregate IP stats
+      const ipKey = `${update.ip}:${update.domain}:${update.chain}`;
+      const existingIp = ipMap.get(ipKey);
+      if (existingIp) {
+        existingIp.upload += update.upload;
+        existingIp.download += update.download;
+        existingIp.count++;
+      } else {
+        ipMap.set(ipKey, { ...update, count: 1 });
+      }
+
+      // Aggregate chain stats
+      const chainKey = update.chain;
+      const existingChain = chainMap.get(chainKey);
+      if (existingChain) {
+        existingChain.upload += update.upload;
+        existingChain.download += update.download;
+        existingChain.count++;
+      } else {
+        chainMap.set(chainKey, { 
+          chains: update.chains, 
+          upload: update.upload, 
+          download: update.download, 
+          count: 1 
+        });
+      }
+
+      // Aggregate rule stats
+      const ruleKey = `${initialRule}:${finalProxy}`;
+      const existingRule = ruleProxyMap.get(ruleKey);
+      if (existingRule) {
+        existingRule.count++;
+      } else {
+        ruleProxyMap.set(ruleKey, { rule: initialRule, proxy: finalProxy, count: 1 });
+      }
+
+      // Aggregate hourly stats
+      const hourKey = hour;
+      const existingHour = hourlyMap.get(hourKey);
+      if (existingHour) {
+        existingHour.upload += update.upload;
+        existingHour.download += update.download;
+        existingHour.connections++;
+      } else {
+        hourlyMap.set(hourKey, { 
+          upload: update.upload, 
+          download: update.download, 
+          connections: 1 
+        });
+      }
+    }
+
+    // Execute batch upserts in a single transaction
+    const transaction = this.db.transaction(() => {
+      // Domain stats
+      const domainStmt = this.db.prepare(`
+        INSERT INTO domain_stats (backend_id, domain, ips, total_upload, total_download, total_connections, last_seen, rules, chains)
+        VALUES (@backendId, @domain, @ip, @upload, @download, @count, @timestamp, @rule, @chain)
+        ON CONFLICT(backend_id, domain) DO UPDATE SET
+          ips = CASE 
+            WHEN domain_stats.ips IS NULL THEN @ip
+            WHEN INSTR(domain_stats.ips, @ip) > 0 THEN domain_stats.ips
+            ELSE domain_stats.ips || ',' || @ip
+          END,
+          total_upload = total_upload + @upload,
+          total_download = total_download + @download,
+          total_connections = total_connections + @count,
+          last_seen = @timestamp,
+          rules = CASE 
+            WHEN domain_stats.rules IS NULL THEN @rule
+            WHEN INSTR(domain_stats.rules, @rule) > 0 THEN domain_stats.rules
+            ELSE domain_stats.rules || ',' || @rule
+          END,
+          chains = CASE 
+            WHEN domain_stats.chains IS NULL THEN @chain
+            WHEN INSTR(domain_stats.chains, @chain) > 0 THEN domain_stats.chains
+            ELSE domain_stats.chains || ',' || @chain
+          END
+      `);
+
+      for (const [key, data] of domainMap) {
+        const initialRule = data.chains.length > 0 ? data.chains[data.chains.length - 1] : 'DIRECT';
+        domainStmt.run({
+          backendId,
+          domain: data.domain,
+          ip: data.ip,
+          upload: data.upload,
+          download: data.download,
+          count: data.count,
+          timestamp,
+          rule: initialRule,
+          chain: data.chain
+        });
+      }
+
+      // IP stats
+      const ipStmt = this.db.prepare(`
+        INSERT INTO ip_stats (backend_id, ip, domains, total_upload, total_download, total_connections, last_seen, chains)
+        VALUES (@backendId, @ip, @domain, @upload, @download, @count, @timestamp, @chain)
+        ON CONFLICT(backend_id, ip) DO UPDATE SET
+          domains = CASE 
+            WHEN ip_stats.domains IS NULL THEN @domain
+            WHEN INSTR(ip_stats.domains, @domain) > 0 THEN ip_stats.domains
+            ELSE ip_stats.domains || ',' || @domain
+          END,
+          total_upload = total_upload + @upload,
+          total_download = total_download + @download,
+          total_connections = total_connections + @count,
+          last_seen = @timestamp,
+          chains = CASE 
+            WHEN ip_stats.chains IS NULL THEN @chain
+            WHEN INSTR(ip_stats.chains, @chain) > 0 THEN ip_stats.chains
+            ELSE ip_stats.chains || ',' || @chain
+          END
+      `);
+
+      for (const [key, data] of ipMap) {
+        ipStmt.run({
+          backendId,
+          ip: data.ip,
+          domain: data.domain || 'unknown',
+          upload: data.upload,
+          download: data.download,
+          count: data.count,
+          timestamp,
+          chain: data.chain
+        });
+      }
+
+      // Chain/Proxy stats
+      const proxyStmt = this.db.prepare(`
+        INSERT INTO proxy_stats (backend_id, chain, total_upload, total_download, total_connections, last_seen)
+        VALUES (@backendId, @chain, @upload, @download, @count, @timestamp)
+        ON CONFLICT(backend_id, chain) DO UPDATE SET
+          total_upload = total_upload + @upload,
+          total_download = total_download + @download,
+          total_connections = total_connections + @count,
+          last_seen = @timestamp
+      `);
+
+      for (const [chain, data] of chainMap) {
+        proxyStmt.run({
+          backendId,
+          chain,
+          upload: data.upload,
+          download: data.download,
+          count: data.count,
+          timestamp
+        });
+      }
+
+      // Rule stats
+      const ruleStmt = this.db.prepare(`
+        INSERT INTO rule_stats (backend_id, rule, final_proxy, total_upload, total_download, total_connections, last_seen)
+        VALUES (@backendId, @rule, @proxy, 0, 0, @count, @timestamp)
+        ON CONFLICT(backend_id, rule) DO UPDATE SET
+          final_proxy = @proxy,
+          total_connections = total_connections + @count,
+          last_seen = @timestamp
+      `);
+
+      for (const [key, data] of ruleProxyMap) {
+        ruleStmt.run({
+          backendId,
+          rule: data.rule,
+          proxy: data.proxy,
+          count: data.count,
+          timestamp
+        });
+      }
+
+      // Rule proxy map (only insert, ignore duplicates)
+      const ruleProxyStmt = this.db.prepare(`
+        INSERT OR IGNORE INTO rule_proxy_map (backend_id, rule, proxy)
+        VALUES (@backendId, @rule, @proxy)
+      `);
+
+      for (const [key, data] of ruleProxyMap) {
+        ruleProxyStmt.run({
+          backendId,
+          rule: data.rule,
+          proxy: data.proxy
+        });
+      }
+
+      // Hourly stats
+      const hourlyStmt = this.db.prepare(`
+        INSERT INTO hourly_stats (backend_id, hour, upload, download, connections)
+        VALUES (@backendId, @hour, @upload, @download, @connections)
+        ON CONFLICT(backend_id, hour) DO UPDATE SET
+          upload = upload + @upload,
+          download = download + @download,
+          connections = connections + @connections
+      `);
+
+      for (const [hour, data] of hourlyMap) {
+        hourlyStmt.run({
+          backendId,
+          hour,
+          upload: data.upload,
+          download: data.download,
+          connections: data.connections
+        });
+      }
+
+      // Batch insert into connection_logs for detailed analytics
+      // All records are preserved for accuracy
+      const logStmt = this.db.prepare(`
+        INSERT INTO connection_logs (backend_id, domain, ip, chain, upload, download)
+        VALUES (@backendId, @domain, @ip, @chain, @upload, @download)
+      `);
+
+      for (const [key, data] of domainMap) {
+        logStmt.run({
+          backendId,
+          domain: data.domain || 'unknown',
+          ip: data.ip,
+          chain: data.chain,
+          upload: data.upload,
+          download: data.download
+        });
+      }
+    });
+
+    transaction();
+  }
+
+  // Batch insert connection logs (for optimized bulk writing)
+  batchInsertConnectionLogs(backendId: number, logs: Array<{
+    domain: string;
+    ip: string;
+    chain: string;
+    upload: number;
+    download: number;
+  }>): void {
+    if (logs.length === 0) return;
+
+    const stmt = this.db.prepare(`
+      INSERT INTO connection_logs (backend_id, domain, ip, chain, upload, download)
+      VALUES (@backendId, @domain, @ip, @chain, @upload, @download)
+    `);
+
+    const transaction = this.db.transaction(() => {
+      for (const log of logs) {
+        stmt.run({
+          backendId,
+          domain: log.domain || 'unknown',
+          ip: log.ip,
+          chain: log.chain,
+          upload: log.upload,
+          download: log.download,
+        });
+      }
+    });
+
+    transaction();
+  }
+
   // Get a specific domain by name
   getDomainByName(backendId: number, domain: string): DomainStats | null {
     const stmt = this.db.prepare(`
@@ -1017,16 +1332,21 @@ export class StatsDatabase {
 
   // Get summary stats for a specific backend
   getSummary(backendId: number): { totalConnections: number; totalUpload: number; totalDownload: number; uniqueDomains: number; uniqueIPs: number } {
-    const connectionsStmt = this.db.prepare(`
-      SELECT COUNT(*) as count FROM connection_logs WHERE backend_id = ?
-    `);
-    const totalConnections = (connectionsStmt.get(backendId) as { count: number }).count;
-
+    // Calculate totals from domain_stats (aggregated data) instead of connection_logs
+    // This is more efficient and works with batch writing
     const trafficStmt = this.db.prepare(`
-      SELECT COALESCE(SUM(upload), 0) as upload, COALESCE(SUM(download), 0) as download
-      FROM connection_logs WHERE backend_id = ?
+      SELECT 
+        COALESCE(SUM(total_connections), 0) as connections,
+        COALESCE(SUM(total_upload), 0) as upload, 
+        COALESCE(SUM(total_download), 0) as download
+      FROM domain_stats 
+      WHERE backend_id = ?
     `);
-    const { upload, download } = trafficStmt.get(backendId) as { upload: number; download: number };
+    const { connections, upload, download } = trafficStmt.get(backendId) as { 
+      connections: number; 
+      upload: number; 
+      download: number;
+    };
 
     const domainsStmt = this.db.prepare(`
       SELECT COUNT(DISTINCT domain) as count FROM domain_stats WHERE backend_id = ?
@@ -1039,7 +1359,7 @@ export class StatsDatabase {
     const uniqueIPs = (ipsStmt.get(backendId) as { count: number }).count;
 
     return {
-      totalConnections,
+      totalConnections: connections,
       totalUpload: upload,
       totalDownload: download,
       uniqueDomains,
@@ -1274,11 +1594,6 @@ export class StatsDatabase {
     return result.changes;
   }
 
-  // Vacuum database to reclaim space
-  vacuum(): void {
-    this.db.exec('VACUUM');
-  }
-
   // Get database file size in bytes
   getDatabaseSize(): number {
     try {
@@ -1303,6 +1618,59 @@ export class StatsDatabase {
     const stmt = this.db.prepare(`SELECT COUNT(*) as count FROM connection_logs`);
     const result = stmt.get() as { count: number };
     return result.count;
+  }
+
+  // Retention Configuration Methods
+
+  // Get retention configuration
+  getRetentionConfig(): DatabaseRetentionConfig {
+    const connectionLogsDays = this.db.prepare(`
+      SELECT value FROM app_config WHERE key = 'retention.connection_logs_days'
+    `).get() as { value: string } | undefined;
+
+    const hourlyStatsDays = this.db.prepare(`
+      SELECT value FROM app_config WHERE key = 'retention.hourly_stats_days'
+    `).get() as { value: string } | undefined;
+
+    const autoCleanup = this.db.prepare(`
+      SELECT value FROM app_config WHERE key = 'retention.auto_cleanup'
+    `).get() as { value: string } | undefined;
+
+    return {
+      connectionLogsDays: parseInt(connectionLogsDays?.value || '7', 10),
+      hourlyStatsDays: parseInt(hourlyStatsDays?.value || '30', 10),
+      autoCleanup: autoCleanup?.value === '1',
+    };
+  }
+
+  // Update retention configuration
+  updateRetentionConfig(updates: {
+    connectionLogsDays?: number;
+    hourlyStatsDays?: number;
+    autoCleanup?: boolean;
+  }): DatabaseRetentionConfig {
+    if (updates.connectionLogsDays !== undefined) {
+      this.db.prepare(`
+        INSERT INTO app_config (key, value) VALUES ('retention.connection_logs_days', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+      `).run(updates.connectionLogsDays.toString());
+    }
+
+    if (updates.hourlyStatsDays !== undefined) {
+      this.db.prepare(`
+        INSERT INTO app_config (key, value) VALUES ('retention.hourly_stats_days', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+      `).run(updates.hourlyStatsDays.toString());
+    }
+
+    if (updates.autoCleanup !== undefined) {
+      this.db.prepare(`
+        INSERT INTO app_config (key, value) VALUES ('retention.auto_cleanup', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+      `).run(updates.autoCleanup ? '1' : '0');
+    }
+
+    return this.getRetentionConfig();
   }
 
   // Backend Management Methods
@@ -1454,16 +1822,19 @@ export class StatsDatabase {
 
   // Get total stats across all backends
   getGlobalSummary(): { totalConnections: number; totalUpload: number; totalDownload: number; uniqueDomains: number; uniqueIPs: number; backendCount: number } {
-    const connectionsStmt = this.db.prepare(`
-      SELECT COUNT(*) as count FROM connection_logs
-    `);
-    const totalConnections = (connectionsStmt.get() as { count: number }).count;
-
+    // Calculate totals from domain_stats (aggregated data) instead of connection_logs
     const trafficStmt = this.db.prepare(`
-      SELECT COALESCE(SUM(upload), 0) as upload, COALESCE(SUM(download), 0) as download
-      FROM connection_logs
+      SELECT 
+        COALESCE(SUM(total_connections), 0) as connections,
+        COALESCE(SUM(total_upload), 0) as upload, 
+        COALESCE(SUM(total_download), 0) as download
+      FROM domain_stats
     `);
-    const { upload, download } = trafficStmt.get() as { upload: number; download: number };
+    const { connections, upload, download } = trafficStmt.get() as { 
+      connections: number; 
+      upload: number; 
+      download: number;
+    };
 
     const domainsStmt = this.db.prepare(`
       SELECT COUNT(DISTINCT domain) as count FROM domain_stats
@@ -1481,12 +1852,50 @@ export class StatsDatabase {
     const backendCount = (backendStmt.get() as { count: number }).count;
 
     return {
-      totalConnections,
+      totalConnections: connections,
       totalUpload: upload,
       totalDownload: download,
       uniqueDomains,
       uniqueIPs,
       backendCount
+    };
+  }
+
+  vacuum(): void {
+    this.db.exec('VACUUM');
+  }
+
+  // Cleanup methods for data retention
+  deleteOldConnectionLogs(cutoff: string): number {
+    const stmt = this.db.prepare(`
+      DELETE FROM connection_logs WHERE timestamp < ?
+    `);
+    return stmt.run(cutoff).changes;
+  }
+
+  deleteOldHourlyStats(cutoff: string): number {
+    const stmt = this.db.prepare(`
+      DELETE FROM hourly_stats WHERE hour < ?
+    `);
+    return stmt.run(cutoff).changes;
+  }
+
+  getCleanupStats(): {
+    connectionLogsCount: number;
+    hourlyStatsCount: number;
+    oldestConnectionLog: string | null;
+    oldestHourlyStat: string | null;
+  } {
+    const logsCountStmt = this.db.prepare('SELECT COUNT(*) as count FROM connection_logs');
+    const hourlyCountStmt = this.db.prepare('SELECT COUNT(*) as count FROM hourly_stats');
+    const oldestLogStmt = this.db.prepare('SELECT MIN(timestamp) as ts FROM connection_logs');
+    const oldestHourlyStmt = this.db.prepare('SELECT MIN(hour) as hr FROM hourly_stats');
+
+    return {
+      connectionLogsCount: (logsCountStmt.get() as { count: number }).count,
+      hourlyStatsCount: (hourlyCountStmt.get() as { count: number }).count,
+      oldestConnectionLog: (oldestLogStmt.get() as { ts: string | null })?.ts || null,
+      oldestHourlyStat: (oldestHourlyStmt.get() as { hr: string | null })?.hr || null,
     };
   }
 

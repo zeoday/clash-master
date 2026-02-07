@@ -233,6 +233,12 @@ export const api = {
 
   vacuumDatabase: () =>
     fetchJson<{ message: string }>(`${API_BASE}/db/vacuum`, 'POST'),
+
+  getRetentionConfig: () =>
+    fetchJson<{ connectionLogsDays: number; hourlyStatsDays: number; autoCleanup: boolean }>(`${API_BASE}/db/retention`),
+
+  updateRetentionConfig: (config: { connectionLogsDays: number; hourlyStatsDays: number; autoCleanup?: boolean }) =>
+    fetchJson<{ message: string }>(`${API_BASE}/db/retention`, 'PUT', config),
 };
 
 // Helper functions for time range

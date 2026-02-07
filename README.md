@@ -85,7 +85,7 @@ services:
 docker compose up -d
 ```
 
-访问 http://localhost:3000
+访问 <http://localhost:3000>
 
 ### 方式三：使用 .env 配置文件
 
@@ -121,7 +121,7 @@ docker run -d \
 
 ![首次使用](./assets/clash-master-setup.png)
 
-1. 打开 http://localhost:3000
+1. 打开 <http://localhost:3000>
 2. 首次访问会弹出**后端配置**对话框
 3. 填写 OpenClash 连接信息：
    - **名称**: 自定义名称（如 "Home"）
@@ -168,7 +168,7 @@ docker compose down
 docker compose up -d
 ```
 
-现在访问 http://localhost:8080
+现在访问 <http://localhost:8080>
 
 ### 方案 3：直接修改 docker-compose.yml
 
@@ -289,7 +289,7 @@ clash-master/
 
 ## 🛠️ 技术栈
 
-- **前端**: Next.js 15 + React 19 + TypeScript + Tailwind CSS
+- **前端**: Next.js 16 + React 19 + TypeScript + Tailwind CSS
 - **数据收集**: Node.js + WebSocket + SQLite
 - **可视化**: Recharts + D3.js
 - **部署**: Docker + Docker Compose
@@ -297,6 +297,10 @@ clash-master/
 ## 📄 许可证
 
 MIT License © 2024 [foru17](https://github.com/foru17)
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=foru17/clash-master&type=date&legend=top-left)](https://www.star-history.com/#foru17/clash-master&type=date&legend=top-left)
 
 ---
 

@@ -1,3 +1,5 @@
+"use client";
+
 import WebSocket from 'ws';
 import type { ConnectionsData } from '@clashmaster/shared';
 import { StatsDatabase } from './db.js';
@@ -9,6 +11,26 @@ interface CollectorOptions {
   reconnectInterval?: number;
   onData?: (data: ConnectionsData) => void;
   onError?: (error: Error) => void;
+}
+
+interface TrafficUpdate {
+  domain: string;
+  ip: string;
+  chain: string;
+  chains: string[];
+  upload: number;
+  download: number;
+}
+
+interface GeoIPResult {
+  ip: string;
+  geo: {
+    country: string;
+    country_name: string;
+    continent: string;
+  } | null;
+  upload: number;
+  download: number;
 }
 
 export class OpenClashCollector {
@@ -98,6 +120,89 @@ export class OpenClashCollector {
   }
 }
 
+// Batch buffer for traffic updates
+class BatchBuffer {
+  private buffer: Map<string, TrafficUpdate> = new Map();
+  private geoQueue: GeoIPResult[] = [];
+  private lastLogTime = 0;
+  private logCounter = 0;
+  
+  add(backendId: number, update: TrafficUpdate) {
+    const key = `${backendId}:${update.domain}:${update.ip}:${update.chain}`;
+    const existing = this.buffer.get(key);
+    
+    if (existing) {
+      existing.upload += update.upload;
+      existing.download += update.download;
+    } else {
+      this.buffer.set(key, { ...update });
+    }
+  }
+  
+  addGeoResult(result: GeoIPResult) {
+    this.geoQueue.push(result);
+  }
+  
+  flush(db: StatsDatabase, geoService: GeoIPService | undefined, backendId: number): { domains: number; rules: number } {
+    if (this.buffer.size === 0) {
+      return { domains: 0, rules: 0 };
+    }
+    
+    const updates = Array.from(this.buffer.values());
+    this.buffer.clear();
+    
+    // Merge geo queue
+    const geoResults = [...this.geoQueue];
+    this.geoQueue = [];
+    
+    // Calculate unique domains and rules for logging
+    const domains = new Set<string>();
+    const rules = new Set<string>();
+    
+    for (const update of updates) {
+      if (update.domain) domains.add(update.domain);
+      const initialRule = update.chains.length > 0 ? update.chains[update.chains.length - 1] : 'DIRECT';
+      rules.add(initialRule);
+    }
+    
+    // Batch write to database
+    try {
+      db.batchUpdateTrafficStats(backendId, updates);
+      
+      // Process geo results
+      for (const result of geoResults) {
+        if (result.geo) {
+          db.updateCountryStats(
+            backendId,
+            result.geo.country,
+            result.geo.country_name,
+            result.geo.continent,
+            result.upload,
+            result.download
+          );
+        }
+      }
+    } catch (err) {
+      console.error(`[Collector:${backendId}] Batch write failed:`, err);
+    }
+    
+    return { domains: domains.size, rules: rules.size };
+  }
+  
+  shouldLog(): boolean {
+    const now = Date.now();
+    if (now - this.lastLogTime > 10000) {
+      this.lastLogTime = now;
+      return true;
+    }
+    return false;
+  }
+  
+  incrementLogCounter(): number {
+    return ++this.logCounter;
+  }
+}
+
 // Track connection state with their accumulated traffic
 interface TrackedConnection {
   id: string;
@@ -120,11 +225,21 @@ export function createCollector(
 ) {
   const id = backendId || 0;
   const activeConnections = new Map<string, TrackedConnection>();
-  let lastLogTime = 0;
+  const batchBuffer = new BatchBuffer();
   let lastBroadcastTime = 0;
   const broadcastThrottleMs = 500;
-
-  return new OpenClashCollector(id, {
+  let flushInterval: NodeJS.Timeout | null = null;
+  
+  // Start batch flush interval (every 1000ms)
+  flushInterval = setInterval(() => {
+    const stats = batchBuffer.flush(db, geoService, id);
+    
+    if (batchBuffer.shouldLog() && (stats.domains > 0 || stats.rules > 0)) {
+      console.log(`[Collector:${id}] Active: ${activeConnections.size}, Domains: ${stats.domains}, Rules: ${stats.rules}`);
+    }
+  }, 1000);
+  
+  const collector = new OpenClashCollector(id, {
     url,
     token,
     onData: (data) => {
@@ -176,15 +291,15 @@ export function createCollector(
             domain,
             ip,
             chains,
-            lastUpload: 0,
-            lastDownload: 0,
+            lastUpload: conn.upload,
+            lastDownload: conn.download,
             totalUpload: conn.upload,
             totalDownload: conn.download,
           });
           
-          // Record initial traffic for new connection
+          // Record initial traffic for new connection (add to batch buffer)
           if (conn.upload > 0 || conn.download > 0) {
-            db.updateTrafficStats(id, {
+            batchBuffer.add(id, {
               domain,
               ip,
               chain: chains[0] || 'DIRECT',
@@ -193,20 +308,18 @@ export function createCollector(
               download: conn.download,
             });
 
-            // Query and update country stats if GeoIP service is available
+            // Queue GeoIP lookup
             if (geoService && ip) {
-              geoService.getGeoLocation(ip).then((geo: { country: string; country_name: string; continent: string } | null) => {
+              geoService.getGeoLocation(ip).then((geo) => {
                 if (geo) {
-                  db.updateCountryStats(
-                    id,
-                    geo.country,
-                    geo.country_name,
-                    geo.continent,
-                    conn.upload,
-                    conn.download
-                  );
+                  batchBuffer.addGeoResult({
+                    ip,
+                    geo,
+                    upload: conn.upload,
+                    download: conn.download,
+                  });
                 }
-              }).catch((err: Error) => {
+              }).catch(() => {
                 // Silently fail for GeoIP errors
               });
             }
@@ -214,7 +327,7 @@ export function createCollector(
             hasNewTraffic = true;
           }
         } else {
-          // Existing connection - calculate delta and update stats
+          // Existing connection - calculate delta and add to batch
           const uploadDelta = Math.max(0, conn.upload - existing.lastUpload);
           const downloadDelta = Math.max(0, conn.download - existing.lastDownload);
           
@@ -223,8 +336,8 @@ export function createCollector(
             existing.totalUpload += uploadDelta;
             existing.totalDownload += downloadDelta;
             
-            // Update stats in database with delta
-            db.updateTrafficStats(id, {
+            // Add delta to batch buffer
+            batchBuffer.add(id, {
               domain: existing.domain,
               ip: existing.ip,
               chain: existing.chains[0] || 'DIRECT',
@@ -233,20 +346,18 @@ export function createCollector(
               download: downloadDelta,
             });
 
-            // Query and update country stats if GeoIP service is available
+            // Queue GeoIP lookup for delta
             if (geoService && existing.ip) {
-              geoService.getGeoLocation(existing.ip).then((geo: { country: string; country_name: string; continent: string } | null) => {
+              geoService.getGeoLocation(existing.ip).then((geo) => {
                 if (geo) {
-                  db.updateCountryStats(
-                    id,
-                    geo.country,
-                    geo.country_name,
-                    geo.continent,
-                    uploadDelta,
-                    downloadDelta
-                  );
+                  batchBuffer.addGeoResult({
+                    ip: existing.ip,
+                    geo,
+                    upload: uploadDelta,
+                    download: downloadDelta,
+                  });
                 }
-              }).catch((err: Error) => {
+              }).catch(() => {
                 // Silently fail for GeoIP errors
               });
             }
@@ -258,7 +369,7 @@ export function createCollector(
         }
       }
       
-      // Find closed connections and flush their remaining traffic
+      // Find closed connections and remove them
       for (const [connId, tracked] of activeConnections) {
         if (!currentIds.has(connId)) {
           // Connection closed - any remaining traffic was already counted
@@ -271,25 +382,23 @@ export function createCollector(
         lastBroadcastTime = now;
         onTrafficUpdate();
       }
-      
-      // Log stats periodically (every 10 seconds)
-      if (now - lastLogTime > 10000) {
-        const domains = new Set<string>();
-        const rules = new Set<string>();
-        
-        for (const conn of activeConnections.values()) {
-          if (conn.domain) domains.add(conn.domain);
-          // The initial rule is the last element in chains array
-          const initialRule = conn.chains.length > 0 ? conn.chains[conn.chains.length - 1] : 'DIRECT';
-          rules.add(initialRule);
-        }
-        
-        console.log(`[Collector:${id}] Active: ${activeConnections.size}, Domains: ${domains.size}, Rules: ${rules.size}`);
-        lastLogTime = now;
-      }
     },
     onError: (err) => {
       console.error(`[Collector:${id}] Error:`, err);
     }
   });
+  
+  // Override disconnect to clear interval
+  const originalDisconnect = collector.disconnect.bind(collector);
+  collector.disconnect = () => {
+    if (flushInterval) {
+      clearInterval(flushInterval);
+      flushInterval = null;
+      // Final flush
+      batchBuffer.flush(db, geoService, id);
+    }
+    originalDisconnect();
+  };
+  
+  return collector;
 }

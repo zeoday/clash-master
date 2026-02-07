@@ -7,6 +7,7 @@ import { OverviewCard } from "./overview-card";
 import { TopListItem } from "./top-list-item";
 import { Button } from "@/components/ui/button";
 import { formatBytes, formatNumber } from "@/lib/utils";
+import { useSettings, getFaviconUrl } from "@/lib/settings";
 import type { DomainStats } from "@clashmaster/shared";
 
 interface DomainTopListProps {
@@ -22,10 +23,6 @@ const COLORS = [
   "#EF4444", "#EC4899", "#6366F1"
 ];
 
-function getFaviconUrl(domain: string): string {
-  return `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
-}
-
 function getInitials(domain: string): string {
   return domain.charAt(0).toUpperCase();
 }
@@ -34,6 +31,7 @@ export function DomainTopList({ data, limit = 7, onViewAll }: DomainTopListProps
   const [sortBy, setSortBy] = useState<SortBy>("traffic");
   const t = useTranslations("topDomains");
   const proxiesT = useTranslations("proxies");
+  const { settings } = useSettings();
 
   const { domains, totalTraffic, totalConnections } = useMemo(() => {
     if (!data) return { domains: [], totalTraffic: 0, totalConnections: 0 };
@@ -62,6 +60,11 @@ export function DomainTopList({ data, limit = 7, onViewAll }: DomainTopListProps
 
   const toggleSort = () => {
     setSortBy(prev => prev === "traffic" ? "connections" : "traffic");
+  };
+
+  // Get favicon URL using current provider
+  const getFaviconForDomain = (domain: string) => {
+    return getFaviconUrl(domain, settings.faviconProvider);
   };
 
   if (domains.length === 0) {
@@ -107,7 +110,7 @@ export function DomainTopList({ data, limit = 7, onViewAll }: DomainTopListProps
             rank={index + 1}
             icon={
               <img
-                src={getFaviconUrl(domain.domain)}
+                src={getFaviconForDomain(domain.domain)}
                 alt=""
                 className="w-5 h-5"
                 onError={(e) => {

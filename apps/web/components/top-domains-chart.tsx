@@ -27,6 +27,14 @@ interface TopDomainsChartProps {
 const TOP_OPTIONS = [10, 20, 50, 100] as const;
 type TopOption = (typeof TOP_OPTIONS)[number];
 
+// Dynamic height configuration based on topN
+const CHART_CONFIG = {
+  10: { height: 350, barSize: 32, showAllLabels: true },
+  20: { height: 450, barSize: 24, showAllLabels: true },
+  50: { height: 700, barSize: 18, showAllLabels: true },
+  100: { height: 1200, barSize: 14, showAllLabels: true },
+} as const;
+
 // Vibrant color palette for bars
 const COLORS = [
   "#3B82F6", // Blue
@@ -83,6 +91,9 @@ export function TopDomainsChart({ data }: TopDomainsChartProps) {
 
   // Show labels only when container is wide enough (> 400px)
   const showLabels = containerWidth > 400;
+
+  // Get chart configuration based on topN
+  const config = CHART_CONFIG[topN];
 
   const chartData = useMemo(() => {
     if (!data) return [];
@@ -170,7 +181,10 @@ export function TopDomainsChart({ data }: TopDomainsChartProps) {
         </div>
       </CardHeader>
       <CardContent ref={containerRef}>
-        <div className="h-[350px] w-full min-w-0 overflow-hidden sm:overflow-visible">
+        <div 
+          className="w-full min-w-0 overflow-hidden sm:overflow-visible transition-all duration-500 ease-in-out"
+          style={{ height: `${config.height}px` }}
+        >
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={chartData}
@@ -210,7 +224,7 @@ export function TopDomainsChart({ data }: TopDomainsChartProps) {
               <Bar
                 dataKey="total"
                 radius={[0, 4, 4, 0]}
-                maxBarSize={32}
+                maxBarSize={config.barSize}
                 isAnimationActive={!hasRenderedRef.current}
                 animationDuration={600}>
                 {chartData.map((entry, index) => (

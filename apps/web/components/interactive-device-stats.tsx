@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { Loader2, BarChart3, Link2, Waypoints } from "lucide-react";
+import { Loader2, BarChart3, Link2, Smartphone, Monitor, Tablet, HelpCircle } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, BarChart, Bar, XAxis, YAxis, Cell as BarCell, LabelList } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,28 +13,14 @@ import { api } from "@/lib/api";
 import { Favicon } from "@/components/favicon";
 import { DomainStatsTable, IPStatsTable } from "@/components/stats-tables";
 import { COLORS } from "@/lib/stats-utils";
-import type { ProxyStats, DomainStats, IPStats } from "@clashmaster/shared";
+import type { DeviceStats, DomainStats, IPStats } from "@clashmaster/shared";
 
-interface InteractiveProxyStatsProps {
-  data: ProxyStats[];
+interface InteractiveDeviceStatsProps {
+  data: DeviceStats[];
   activeBackendId?: number;
 }
 
-function simplifyProxyName(name: string): string {
-  if (!name) return "DIRECT";
-  return name.trim();
-}
 
-function getProxyEmoji(name: string): string {
-  if (name.includes("🇺🇸")) return "🇺🇸";
-  if (name.includes("🇯🇵")) return "🇯🇵";
-  if (name.includes("🇸🇬")) return "🇸🇬";
-  if (name.includes("🇭🇰")) return "🇭🇰";
-  if (name.includes("🇹🇼")) return "🇹🇼";
-  if (name.includes("🇰🇷")) return "🇰🇷";
-  if (name === "DIRECT" || name === "Direct") return "🏠";
-  return "🌐";
-}
 
 function renderCustomBarLabel(props: any) {
   const { x, y, width, value, height } = props;
@@ -45,13 +31,13 @@ function renderCustomBarLabel(props: any) {
   );
 }
 
-export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProxyStatsProps) {
-  const t = useTranslations("proxies");
+export function InteractiveDeviceStats({ data, activeBackendId }: InteractiveDeviceStatsProps) {
+  const t = useTranslations("devices");
   const domainsT = useTranslations("domains");
   
-  const [selectedProxy, setSelectedProxy] = useState<string | null>(null);
-  const [proxyDomains, setProxyDomains] = useState<DomainStats[]>([]);
-  const [proxyIPs, setProxyIPs] = useState<IPStats[]>([]);
+  const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
+  const [deviceDomains, setDeviceDomains] = useState<DomainStats[]>([]);
+  const [deviceIPs, setDeviceIPs] = useState<IPStats[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("domains");
   const [showDomainBarLabels, setShowDomainBarLabels] = useState(true);
@@ -66,60 +52,59 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
 
   const chartData = useMemo(() => {
     if (!data) return [];
-    return data.map((proxy, index) => ({
-      name: simplifyProxyName(proxy.chain),
-      rawName: proxy.chain,
-      value: proxy.totalDownload + proxy.totalUpload,
-      download: proxy.totalDownload,
-      upload: proxy.totalUpload,
-      connections: proxy.totalConnections,
+    return data.map((device, index) => ({
+      name: device.sourceIP,
+      rawName: device.sourceIP,
+      value: device.totalDownload + device.totalUpload,
+      download: device.totalDownload,
+      upload: device.totalUpload,
+      connections: device.totalConnections,
       color: COLORS[index % COLORS.length],
-      emoji: getProxyEmoji(proxy.chain),
       rank: index,
     }));
   }, [data]);
 
   const totalTraffic = useMemo(() => chartData.reduce((sum, item) => sum + item.value, 0), [chartData]);
-  const topProxies = useMemo(() => [...chartData].sort((a, b) => b.value - a.value).slice(0, 4), [chartData]);
-  const maxTotal = useMemo(() => chartData.length ? Math.max(...chartData.map(p => p.value)) : 1, [chartData]);
+  const topDevices = useMemo(() => [...chartData].sort((a, b) => b.value - a.value).slice(0, 4), [chartData]);
+  const maxTotal = useMemo(() => chartData.length ? Math.max(...chartData.map(d => d.value)) : 1, [chartData]);
 
-  const loadProxyDetails = useCallback(async (chain: string) => {
+  const loadDeviceDetails = useCallback(async (sourceIP: string) => {
     setLoading(true);
     try {
       const [domains, ips] = await Promise.all([
-        api.getProxyDomains(chain, activeBackendId),
-        api.getProxyIPs(chain, activeBackendId),
+        api.getDeviceDomains(sourceIP, activeBackendId),
+        api.getDeviceIPs(sourceIP, activeBackendId),
       ]);
-      setProxyDomains(domains);
-      setProxyIPs(ips);
+      setDeviceDomains(domains);
+      setDeviceIPs(ips);
     } catch (err) {
-      console.error(`Failed to load details for ${chain}:`, err);
-      setProxyDomains([]);
-      setProxyIPs([]);
+      console.error(`Failed to load details for ${sourceIP}:`, err);
+      setDeviceDomains([]);
+      setDeviceIPs([]);
     } finally {
       setLoading(false);
     }
   }, [activeBackendId]);
 
   useEffect(() => {
-    if (chartData.length > 0 && !selectedProxy) {
-      const firstProxy = chartData[0].rawName;
-      setSelectedProxy(firstProxy);
-      loadProxyDetails(firstProxy);
+    if (chartData.length > 0 && !selectedDevice) {
+      const firstDevice = chartData[0].rawName;
+      setSelectedDevice(firstDevice);
+      loadDeviceDetails(firstDevice);
     }
-  }, [chartData, selectedProxy, loadProxyDetails]);
+  }, [chartData, selectedDevice, loadDeviceDetails]);
 
-  const handleProxyClick = useCallback((rawName: string) => {
-    if (selectedProxy !== rawName) {
-      setSelectedProxy(rawName);
-      loadProxyDetails(rawName);
+  const handleDeviceClick = useCallback((rawName: string) => {
+    if (selectedDevice !== rawName) {
+      setSelectedDevice(rawName);
+      loadDeviceDetails(rawName);
     }
-  }, [selectedProxy, loadProxyDetails]);
+  }, [selectedDevice, loadDeviceDetails]);
 
-  const selectedProxyData = useMemo(() => chartData.find(d => d.rawName === selectedProxy), [chartData, selectedProxy]);
+  const selectedDeviceData = useMemo(() => chartData.find(d => d.rawName === selectedDevice), [chartData, selectedDevice]);
 
   const domainChartData = useMemo(() => {
-    return [...proxyDomains]
+    return [...deviceDomains]
       .sort((a, b) => (b.totalDownload + b.totalUpload) - (a.totalDownload + a.totalUpload))
       .slice(0, 10)
       .map((d, i) => ({
@@ -131,13 +116,13 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
         connections: d.totalConnections,
         color: COLORS[i % COLORS.length],
       }));
-  }, [proxyDomains]);
+  }, [deviceDomains]);
 
   if (chartData.length === 0) {
     return (
       <Card>
         <CardContent className="p-12 text-center text-muted-foreground">
-          <Waypoints className="w-8 h-8 mx-auto mb-2 opacity-50" />
+          <Smartphone className="w-8 h-8 mx-auto mb-2 opacity-50" />
           <p>{t("noData")}</p>
         </CardContent>
       </Card>
@@ -162,20 +147,29 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
                   <RechartsTooltip content={({ active, payload }) => {
                     if (active && payload && payload.length) {
                       const item = payload[0].payload;
-                      return (<div className="bg-background border border-border p-3 rounded-lg shadow-lg"><p className="font-medium text-sm mb-1">{item.emoji} {item.name}</p><p className="text-xs text-muted-foreground">{formatBytes(item.value)}</p></div>);
+                      return (<div className="bg-background border border-border p-3 rounded-lg shadow-lg"><p className="font-medium text-sm mb-1">{item.name}</p><p className="text-xs text-muted-foreground">{formatBytes(item.value)}</p></div>);
                     }
                     return null;
                   }} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
-            {topProxies.length > 0 && (
+            {topDevices.length > 0 && (
               <div className="mt-2">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider text-center">Top 4</p>
                 <div className="mt-1 space-y-1.5">
-                  {topProxies.map((item, idx) => {
+                  {topDevices.map((item, idx) => {
                     const rankBadgeClass = idx === 0 ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" : idx === 1 ? "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" : idx === 2 ? "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300" : "bg-muted text-muted-foreground";
-                    return (<div key={item.rawName} title={item.name} className="flex items-center gap-1.5 min-w-0"><span className={cn("w-5 h-5 rounded-md text-[10px] font-bold flex items-center justify-center shrink-0", rankBadgeClass)}>{idx + 1}</span><span className="px-1.5 py-0.5 rounded-md text-[10px] font-medium text-white/90 truncate min-w-0" style={{ backgroundColor: item.color }}>{item.emoji} {item.name}</span></div>);
+                    return (
+                      <div key={item.rawName} title={item.name} className="flex items-center gap-1.5 min-w-0">
+                        <span className={cn("w-5 h-5 rounded-md text-[10px] font-bold flex items-center justify-center shrink-0", rankBadgeClass)}>
+                          {idx + 1}
+                        </span>
+                        <div className="px-1.5 py-0.5 rounded-md text-[10px] font-medium text-white/90 truncate min-w-0 max-w-full flex items-center gap-1" style={{ backgroundColor: item.color }}>
+                          <span className="truncate">{item.name}</span>
+                        </div>
+                      </div>
+                    );
                   })}
                 </div>
               </div>
@@ -183,7 +177,7 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
           </CardContent>
         </Card>
 
-        {/* Proxy List */}
+        {/* Device List */}
         <Card className="lg:col-span-4">
           <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">{t("title")}</CardTitle></CardHeader>
           <CardContent className="p-3">
@@ -192,13 +186,12 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
                 {chartData.map((item) => {
                   const percentage = totalTraffic > 0 ? (item.value / totalTraffic) * 100 : 0;
                   const barPercent = (item.value / maxTotal) * 100;
-                  const isSelected = selectedProxy === item.rawName;
+                  const isSelected = selectedDevice === item.rawName;
                   const badgeColor = item.rank === 0 ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" : item.rank === 1 ? "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" : item.rank === 2 ? "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400" : "bg-muted text-muted-foreground";
                   return (
-                    <button key={item.rawName} onClick={() => handleProxyClick(item.rawName)} className={cn("w-full p-2.5 rounded-xl border text-left transition-all duration-200", isSelected ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border/50 bg-card/50 hover:bg-card hover:border-primary/30")}>
+                    <button key={item.rawName} onClick={() => handleDeviceClick(item.rawName)} className={cn("w-full p-2.5 rounded-xl border text-left transition-all duration-200", isSelected ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border/50 bg-card/50 hover:bg-card hover:border-primary/30")}>
                       <div className="flex items-center gap-2 mb-1.5">
                         <span className={cn("w-5 h-5 rounded-md text-[10px] font-bold flex items-center justify-center shrink-0", badgeColor)}>{item.rank + 1}</span>
-                        <span className="text-sm shrink-0">{item.emoji}</span>
                         <span className="flex-1 text-sm font-medium truncate" title={item.name}>{item.name}</span>
                         <span className="text-sm font-bold tabular-nums shrink-0">{formatBytes(item.value)}</span>
                       </div>
@@ -229,7 +222,7 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2"><BarChart3 className="h-4 w-4" />{domainsT("title")}</CardTitle>
-              {selectedProxyData && (<span className="text-xs text-muted-foreground">{selectedProxyData.emoji} {selectedProxyData.name}</span>)}
+              {selectedDeviceData && (<span className="text-xs text-muted-foreground">{selectedDeviceData.name}</span>)}
             </div>
           </CardHeader>
           <CardContent className="pt-0">
@@ -261,17 +254,17 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
       </div>
 
       {/* Bottom: Tabs with shared table components */}
-      {selectedProxy && (
+      {selectedDevice && (
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList className="glass">
             <TabsTrigger value="domains">{domainsT("domainList")}</TabsTrigger>
             <TabsTrigger value="ips">IP Addresses</TabsTrigger>
           </TabsList>
           <TabsContent value="domains" className="mt-4">
-            <DomainStatsTable domains={proxyDomains} loading={loading} />
+            <DomainStatsTable domains={deviceDomains} loading={loading} />
           </TabsContent>
           <TabsContent value="ips" className="mt-4">
-            <IPStatsTable ips={proxyIPs} loading={loading} />
+            <IPStatsTable ips={deviceIPs} loading={loading} />
           </TabsContent>
         </Tabs>
       )}

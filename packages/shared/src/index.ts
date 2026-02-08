@@ -97,6 +97,14 @@ export interface ProxyStats {
   lastSeen: string;
 }
 
+export interface DeviceStats {
+  sourceIP: string;
+  totalUpload: number;
+  totalDownload: number;
+  totalConnections: number;
+  lastSeen: string;
+}
+
 export interface RuleStats {
   rule: string;
   finalProxy: string;

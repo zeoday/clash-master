@@ -344,6 +344,36 @@ export class APIServer {
       );
     });
 
+    // Get device statistics for a specific backend
+    app.get('/api/stats/devices', async (request, reply) => {
+      const backendId = getBackendId(request);
+      if (backendId === null) {
+        return reply.status(404).send({ error: 'No backend specified or active' });
+      }
+      const { limit, start, end } = request.query as { limit?: string; start?: string; end?: string };
+      return this.db.getDevices(backendId, parseInt(limit || '50'), start, end);
+    });
+
+    app.get('/api/stats/devices/domains', async (request, reply) => {
+      const backendId = getBackendId(request);
+      if (backendId === null) {
+        return reply.status(404).send({ error: 'No backend specified or active' });
+      }
+      const { sourceIP } = request.query as { sourceIP: string };
+      if (!sourceIP) return [];
+      return this.db.getDeviceDomains(backendId, sourceIP);
+    });
+
+    app.get('/api/stats/devices/ips', async (request, reply) => {
+      const backendId = getBackendId(request);
+      if (backendId === null) {
+        return reply.status(404).send({ error: 'No backend specified or active' });
+      }
+      const { sourceIP } = request.query as { sourceIP: string };
+      if (!sourceIP) return [];
+      return this.db.getDeviceIPs(backendId, sourceIP);
+    });
+
     // Get hourly statistics for a specific backend
     app.get('/api/stats/hourly', async (request, reply) => {
       const backendId = getBackendId(request);

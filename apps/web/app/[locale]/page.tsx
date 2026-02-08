@@ -28,6 +28,7 @@ import { OverviewTab } from "@/components/overview";
 import { TopDomainsChart } from "@/components/top-domains-chart";
 import { ProxyStatsChart } from "@/components/proxy-stats-chart";
 import { InteractiveProxyStats } from "@/components/interactive-proxy-stats";
+import { InteractiveDeviceStats } from "@/components/interactive-device-stats";
 import { InteractiveRuleStats } from "@/components/interactive-rule-stats";
 import { RuleChainChart } from "@/components/rule-chain-chart";
 import { WorldTrafficMap } from "@/components/world-traffic-map";
@@ -58,7 +59,7 @@ import {
   type Backend,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { StatsSummary, CountryStats } from "@clashmaster/shared";
+import type { StatsSummary, CountryStats, DeviceStats } from "@clashmaster/shared";
 
 function formatTimeAgo(date: Date, t: any): string {
   const now = new Date();
@@ -77,6 +78,7 @@ const NAV_ITEMS = [
   { id: "overview", label: "overview" },
   { id: "domains", label: "domains" },
   { id: "countries", label: "countries" },
+  { id: "devices", label: "devices" },
   { id: "proxies", label: "proxies" },
   { id: "rules", label: "rules" },
 ];
@@ -187,6 +189,48 @@ const RulesContent = memo(function RulesContent({
     <div className="space-y-6">
       <InteractiveRuleStats
         data={data?.ruleStats || []}
+        activeBackendId={activeBackendId}
+      />
+    </div>
+  );
+});
+
+const DevicesContent = memo(function DevicesContent({
+  activeBackendId,
+}: {
+  activeBackendId?: number;
+}) {
+  const [deviceStats, setDeviceStats] = useState<DeviceStats[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchDevices = async () => {
+      setLoading(true);
+      try {
+        const data = await api.getDevices(activeBackendId);
+        setDeviceStats(data);
+      } catch (err) {
+        console.error("Failed to fetch device stats:", err);
+        setDeviceStats([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchDevices();
+  }, [activeBackendId]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center p-12">
+        <RefreshCw className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <InteractiveDeviceStats
+        data={deviceStats}
         activeBackendId={activeBackendId}
       />
     </div>
@@ -349,6 +393,8 @@ export default function DashboardPage() {
         );
       case "rules":
         return <RulesContent data={data} activeBackendId={activeBackend?.id} />;
+      case "devices":
+        return <DevicesContent activeBackendId={activeBackend?.id} />;
       case "network":
         return <NetworkContent />;
       default:

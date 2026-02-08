@@ -21,6 +21,7 @@ interface TrafficUpdate {
   rulePayload: string;
   upload: number;
   download: number;
+  sourceIP?: string;
 }
 
 interface GeoIPResult {
@@ -257,6 +258,7 @@ interface TrackedConnection {
   lastDownload: number;
   totalUpload: number;
   totalDownload: number;
+  sourceIP?: string;
 }
 
 export function createCollector(
@@ -338,6 +340,7 @@ export function createCollector(
         const metadata = conn.metadata || {};
         const domain = metadata.host || metadata.sniffHost || "";
         const ip = metadata.destinationIP || "";
+        const sourceIP = metadata.sourceIP || "";
         const chains = Array.isArray(conn.chains) ? conn.chains : ["DIRECT"];
         const rule = conn.rule || "Match";
         const rulePayload = conn.rulePayload || "";
@@ -357,6 +360,7 @@ export function createCollector(
             lastDownload: conn.download,
             totalUpload: conn.upload,
             totalDownload: conn.download,
+            sourceIP,
           });
 
           // Record initial traffic for new connection (add to batch buffer)
@@ -370,6 +374,7 @@ export function createCollector(
               rulePayload,
               upload: conn.upload,
               download: conn.download,
+              sourceIP,
             });
             realtimeStore.recordTraffic(
               id,
@@ -438,6 +443,7 @@ export function createCollector(
               rulePayload: existing.rulePayload || "",
               upload: uploadDelta,
               download: downloadDelta,
+              sourceIP: existing.sourceIP,
             });
             realtimeStore.recordTraffic(
               id,

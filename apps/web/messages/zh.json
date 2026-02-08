@@ -7,6 +7,7 @@
     "overview": "概览",
     "domains": "域名",
     "countries": "地区",
+    "devices": "设备",
     "proxies": "代理",
     "rules": "规则",
     "network": "网络",
@@ -97,6 +98,7 @@
     "associatedIPs": "关联 IP 地址",
     "search": "搜索域名...",
     "noResults": "未找到域名",
+    "noData": "暂无域名数据",
     "connections": "连接",
     "lastSeen": "最后访问",
     "topDomainsByTraffic": "按流量排序的热门域名",
@@ -164,6 +166,15 @@
     "sortByConnections": "连接",
     "noData": "暂无数据",
     "viewAll": "返回全部节点"
+  },
+  "devices": {
+    "title": "设备",
+    "distribution": "设备流量分布",
+    "noData": "暂无设备数据",
+    "connections": "连接",
+    "total": "总计",
+    "download": "下载",
+    "upload": "上传"
   },
   "rules": {
     "title": "规则",

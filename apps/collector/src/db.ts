@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
-import type { Connection, DomainStats, IPStats, HourlyStats, DailyStats, ProxyStats, RuleStats, ProxyTrafficStats } from '@clashmaster/shared';
+import type { Connection, DomainStats, IPStats, HourlyStats, DailyStats, ProxyStats, RuleStats, ProxyTrafficStats, DeviceStats } from '@clashmaster/shared';
 // Retention config stored in database (doesn't include cleanupInterval)
 interface DatabaseRetentionConfig {
   connectionLogsDays: number;
@@ -18,6 +18,7 @@ export interface TrafficUpdate {
   rulePayload: string;
   upload: number;
   download: number;
+  sourceIP?: string;
 }
 
 export interface BackendConfig {
@@ -168,6 +169,52 @@ export class StatsDatabase {
         FOREIGN KEY (backend_id) REFERENCES backend_configs(id) ON DELETE CASCADE
       );
     `);
+
+    // Device statistics per backend
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS device_stats (
+        backend_id INTEGER NOT NULL,
+        source_ip TEXT NOT NULL,
+        total_upload INTEGER DEFAULT 0,
+        total_download INTEGER DEFAULT 0,
+        total_connections INTEGER DEFAULT 0,
+        last_seen DATETIME,
+        PRIMARY KEY (backend_id, source_ip),
+        FOREIGN KEY (backend_id) REFERENCES backend_configs(id) ON DELETE CASCADE
+      );
+    `);
+
+    // Device×domain traffic aggregation
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS device_domain_stats (
+        backend_id INTEGER NOT NULL,
+        source_ip TEXT NOT NULL,
+        domain TEXT NOT NULL,
+        total_upload INTEGER DEFAULT 0,
+        total_download INTEGER DEFAULT 0,
+        total_connections INTEGER DEFAULT 0,
+        last_seen DATETIME,
+        PRIMARY KEY (backend_id, source_ip, domain),
+        FOREIGN KEY (backend_id) REFERENCES backend_configs(id) ON DELETE CASCADE
+      );
+    `);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_device_domain_source_ip ON device_domain_stats(backend_id, source_ip);`);
+
+    // Device×IP traffic aggregation
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS device_ip_stats (
+        backend_id INTEGER NOT NULL,
+        source_ip TEXT NOT NULL,
+        ip TEXT NOT NULL,
+        total_upload INTEGER DEFAULT 0,
+        total_download INTEGER DEFAULT 0,
+        total_connections INTEGER DEFAULT 0,
+        last_seen DATETIME,
+        PRIMARY KEY (backend_id, source_ip, ip),
+        FOREIGN KEY (backend_id) REFERENCES backend_configs(id) ON DELETE CASCADE
+      );
+    `);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_device_ip_source_ip ON device_ip_stats(backend_id, source_ip);`);
 
     // Hourly aggregation per backend
     this.db.exec(`
@@ -968,6 +1015,9 @@ export class StatsDatabase {
     const minuteMap = new Map<string, { upload: number; download: number; connections: number }>();
     const domainProxyMap = new Map<string, { domain: string; chain: string; upload: number; download: number; count: number }>();
     const ipProxyMap = new Map<string, { ip: string; chain: string; upload: number; download: number; count: number; domains: Set<string> }>();
+    const deviceMap = new Map<string, { sourceIP: string; upload: number; download: number; count: number }>();
+    const deviceDomainMap = new Map<string, { sourceIP: string; domain: string; upload: number; download: number; count: number }>();
+    const deviceIPMap = new Map<string, { sourceIP: string; ip: string; upload: number; download: number; count: number }>();
 
     for (const update of updates) {
       if (update.upload === 0 && update.download === 0) continue;
@@ -1121,6 +1171,48 @@ export class StatsDatabase {
           domains.add(update.domain);
         }
         ipProxyMap.set(ipPKey, { ip: update.ip, chain: proxyChain, upload: update.upload, download: update.download, count: 1, domains });
+      }
+
+      // Aggregate device stats
+      if (update.sourceIP) {
+        const sourceIP = update.sourceIP;
+        
+        // Device stats
+        const deviceKey = sourceIP;
+        const existingDevice = deviceMap.get(deviceKey);
+        if (existingDevice) {
+          existingDevice.upload += update.upload;
+          existingDevice.download += update.download;
+          existingDevice.count++;
+        } else {
+          deviceMap.set(deviceKey, { sourceIP, upload: update.upload, download: update.download, count: 1 });
+        }
+
+        // Device domain stats
+        if (update.domain) {
+          const deviceDomainKey = `${sourceIP}:${update.domain}`;
+          const existingDeviceDomain = deviceDomainMap.get(deviceDomainKey);
+          if (existingDeviceDomain) {
+            existingDeviceDomain.upload += update.upload;
+            existingDeviceDomain.download += update.download;
+            existingDeviceDomain.count++;
+          } else {
+            deviceDomainMap.set(deviceDomainKey, { sourceIP, domain: update.domain, upload: update.upload, download: update.download, count: 1 });
+          }
+        }
+
+        // Device IP stats
+        if (update.ip) {
+          const deviceIPKey = `${sourceIP}:${update.ip}`;
+          const existingDeviceIP = deviceIPMap.get(deviceIPKey);
+          if (existingDeviceIP) {
+            existingDeviceIP.upload += update.upload;
+            existingDeviceIP.download += update.download;
+            existingDeviceIP.count++;
+          } else {
+            deviceIPMap.set(deviceIPKey, { sourceIP, ip: update.ip, upload: update.upload, download: update.download, count: 1 });
+          }
+        }
       }
     }
 
@@ -1446,6 +1538,73 @@ export class StatsDatabase {
           }
         }
       }
+      // Device stats
+      const deviceStmt = this.db.prepare(`
+        INSERT INTO device_stats (backend_id, source_ip, total_upload, total_download, total_connections, last_seen)
+        VALUES (@backendId, @sourceIP, @upload, @download, @count, @timestamp)
+        ON CONFLICT(backend_id, source_ip) DO UPDATE SET
+          total_upload = total_upload + @upload,
+          total_download = total_download + @download,
+          total_connections = total_connections + @count,
+          last_seen = @timestamp
+      `);
+
+      for (const [key, data] of deviceMap) {
+        deviceStmt.run({
+          backendId,
+          sourceIP: data.sourceIP,
+          upload: data.upload,
+          download: data.download,
+          count: data.count,
+          timestamp
+        });
+      }
+
+      // Device domain stats
+      const deviceDomainStmt = this.db.prepare(`
+        INSERT INTO device_domain_stats (backend_id, source_ip, domain, total_upload, total_download, total_connections, last_seen)
+        VALUES (@backendId, @sourceIP, @domain, @upload, @download, @count, @timestamp)
+        ON CONFLICT(backend_id, source_ip, domain) DO UPDATE SET
+          total_upload = total_upload + @upload,
+          total_download = total_download + @download,
+          total_connections = total_connections + @count,
+          last_seen = @timestamp
+      `);
+
+      for (const [key, data] of deviceDomainMap) {
+        deviceDomainStmt.run({
+          backendId,
+          sourceIP: data.sourceIP,
+          domain: data.domain,
+          upload: data.upload,
+          download: data.download,
+          count: data.count,
+          timestamp
+        });
+      }
+
+      // Device IP stats
+      const deviceIPStmt = this.db.prepare(`
+        INSERT INTO device_ip_stats (backend_id, source_ip, ip, total_upload, total_download, total_connections, last_seen)
+        VALUES (@backendId, @sourceIP, @ip, @upload, @download, @count, @timestamp)
+        ON CONFLICT(backend_id, source_ip, ip) DO UPDATE SET
+          total_upload = total_upload + @upload,
+          total_download = total_download + @download,
+          total_connections = total_connections + @count,
+          last_seen = @timestamp
+      `);
+
+      for (const [key, data] of deviceIPMap) {
+        deviceIPStmt.run({
+          backendId,
+          sourceIP: data.sourceIP,
+          ip: data.ip,
+          upload: data.upload,
+          download: data.download,
+          count: data.count,
+          timestamp
+        });
+      }
     });
 
     transaction();
@@ -1733,6 +1892,94 @@ export class StatsDatabase {
       }
     });
     tx();
+  }
+
+  // Get device stats for a specific backend
+  getDevices(backendId: number, limit = 50, start?: string, end?: string): DeviceStats[] {
+    let query = `
+      SELECT source_ip as sourceIP,
+             total_upload as totalUpload, total_download as totalDownload, 
+             total_connections as totalConnections, last_seen as lastSeen
+      FROM device_stats
+      WHERE backend_id = ?
+    `;
+    const params: any[] = [backendId];
+
+    if (start && end) {
+      // If time range provided, use minute_stats to filter (approximate) or adjust query if we had time-series device data
+      // For now we return all stats as device_stats is aggregated totals
+    }
+
+    query += ` ORDER BY (total_upload + total_download) DESC LIMIT ?`;
+    params.push(limit);
+
+    const stmt = this.db.prepare(query);
+    return stmt.all(...params) as DeviceStats[];
+  }
+
+  // Get domain breakdown for a specific device
+  getDeviceDomains(backendId: number, sourceIP: string): DomainStats[] {
+    const stmt = this.db.prepare(`
+      SELECT 
+        d.domain, 
+        d.total_upload as totalUpload, 
+        d.total_download as totalDownload, 
+        d.total_connections as totalConnections, 
+        d.last_seen as lastSeen,
+        g.ips
+      FROM device_domain_stats d
+      LEFT JOIN domain_stats g ON d.domain = g.domain AND d.backend_id = g.backend_id
+      WHERE d.backend_id = ? AND d.source_ip = ?
+      ORDER BY (d.total_upload + d.total_download) DESC
+      LIMIT 100
+    `);
+    const result = stmt.all(backendId, sourceIP) as any[];
+    return result.map(r => ({
+      ...r,
+      ips: r.ips ? r.ips.split(',') : [],
+      rules: [],
+      chains: []
+    }));
+  }
+
+  // Get IP breakdown for a specific device
+  getDeviceIPs(backendId: number, sourceIP: string): IPStats[] {
+    const stmt = this.db.prepare(`
+      SELECT 
+        d.ip, 
+        d.total_upload as totalUpload, 
+        d.total_download as totalDownload, 
+        d.total_connections as totalConnections, 
+        d.last_seen as lastSeen,
+        i.domains,
+        COALESCE(i.asn, g.asn) as asn,
+        CASE 
+          WHEN g.country IS NOT NULL THEN 
+            json_array(
+              g.country,
+              COALESCE(g.country_name, g.country),
+              COALESCE(g.city, ''),
+              COALESCE(g.as_name, '')
+            )
+          WHEN i.geoip IS NOT NULL THEN 
+            json(i.geoip)
+          ELSE 
+            NULL
+        END as geoIP
+      FROM device_ip_stats d
+      LEFT JOIN ip_stats i ON d.ip = i.ip AND d.backend_id = i.backend_id
+      LEFT JOIN geoip_cache g ON d.ip = g.ip
+      WHERE d.backend_id = ? AND d.source_ip = ?
+      ORDER BY (d.total_upload + d.total_download) DESC
+      LIMIT 100
+    `);
+    const result = stmt.all(backendId, sourceIP) as any[];
+    return result.map(r => ({
+      ...r,
+      domains: r.domains ? r.domains.split(',') : [],
+      geoIP: r.geoIP ? JSON.parse(r.geoIP).filter(Boolean) : undefined,
+      asn: r.asn || undefined,
+    }));
   }
 
   // Get top domains for a specific backend
@@ -2539,6 +2786,11 @@ export class StatsDatabase {
         this.db.prepare(`DELETE FROM domain_proxy_stats WHERE backend_id = ?`).run(backendId);
         this.db.prepare(`DELETE FROM ip_proxy_stats WHERE backend_id = ?`).run(backendId);
 
+        // Clear device stats
+        this.db.prepare(`DELETE FROM device_stats WHERE backend_id = ?`).run(backendId);
+        this.db.prepare(`DELETE FROM device_domain_stats WHERE backend_id = ?`).run(backendId);
+        this.db.prepare(`DELETE FROM device_ip_stats WHERE backend_id = ?`).run(backendId);
+
         // Clear hourly stats (used for today traffic)
         this.db.prepare(`DELETE FROM hourly_stats WHERE backend_id = ?`).run(backendId);
       } else {
@@ -2588,6 +2840,11 @@ export class StatsDatabase {
         // Clear new aggregation tables
         this.db.prepare(`DELETE FROM domain_proxy_stats`).run();
         this.db.prepare(`DELETE FROM ip_proxy_stats`).run();
+
+        // Clear device stats
+        this.db.prepare(`DELETE FROM device_stats`).run();
+        this.db.prepare(`DELETE FROM device_domain_stats`).run();
+        this.db.prepare(`DELETE FROM device_ip_stats`).run();
 
         // Clear hourly stats (used for today traffic)
         this.db.prepare(`DELETE FROM hourly_stats`).run();
@@ -2844,6 +3101,9 @@ export class StatsDatabase {
       this.db.prepare(`DELETE FROM minute_stats WHERE backend_id = ?`).run(id);
       this.db.prepare(`DELETE FROM domain_proxy_stats WHERE backend_id = ?`).run(id);
       this.db.prepare(`DELETE FROM ip_proxy_stats WHERE backend_id = ?`).run(id);
+      this.db.prepare(`DELETE FROM device_stats WHERE backend_id = ?`).run(id);
+      this.db.prepare(`DELETE FROM device_domain_stats WHERE backend_id = ?`).run(id);
+      this.db.prepare(`DELETE FROM device_ip_stats WHERE backend_id = ?`).run(id);
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');

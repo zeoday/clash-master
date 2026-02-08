@@ -13,6 +13,7 @@ import {
   Info,
   ExternalLink,
   ArrowUpCircle,
+  Smartphone,
   RefreshCw,
   X,
 } from "lucide-react";
@@ -43,6 +44,7 @@ const NAV_ITEMS = [
   { id: "rules", icon: Route },
   { id: "domains", icon: Globe },
   { id: "countries", icon: MapPin },
+  { id: "devices", icon: Smartphone },
   { id: "proxies", icon: Server },
 ];
 

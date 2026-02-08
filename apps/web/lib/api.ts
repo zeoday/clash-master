@@ -9,6 +9,7 @@ import type {
   DailyStats,
   TrafficTrendPoint,
   ProxyTrafficStats,
+  DeviceStats,
 } from "@clashmaster/shared";
 
 type RuntimeConfig = {
@@ -243,6 +244,22 @@ export const api = {
   getProxyIPs: (chain: string, backendId?: number) =>
     fetchJson<IPStats[]>(
       buildUrl(`${API_BASE}/stats/proxies/ips`, { chain, backendId })
+    ),
+
+  // Device stats APIs
+  getDevices: (backendId?: number, limit = 50, range?: TimeRange) =>
+    fetchJson<DeviceStats[]>(
+      buildUrl(`${API_BASE}/stats/devices`, { backendId, limit, start: range?.start, end: range?.end })
+    ),
+
+  getDeviceDomains: (sourceIP: string, backendId?: number) =>
+    fetchJson<DomainStats[]>(
+      buildUrl(`${API_BASE}/stats/devices/domains`, { sourceIP, backendId })
+    ),
+
+  getDeviceIPs: (sourceIP: string, backendId?: number) =>
+    fetchJson<IPStats[]>(
+      buildUrl(`${API_BASE}/stats/devices/ips`, { sourceIP, backendId })
     ),
 
   getRuleDomains: (rule: string, backendId?: number) =>

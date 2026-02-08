@@ -7,6 +7,7 @@
     "overview": "Overview",
     "domains": "Domains",
     "countries": "Regions",
+    "devices": "Devices",
     "proxies": "Proxies",
     "rules": "Rules",
     "network": "Network",
@@ -98,6 +99,7 @@
     "associatedIPs": "Associated IP Addresses",
     "search": "Search domains...",
     "noResults": "No domains found",
+    "noData": "No domain data available",
     "connections": "connections",
     "lastSeen": "Last seen",
     "topDomainsByTraffic": "Top Domains by Traffic",
@@ -165,6 +167,15 @@
     "sortByConnections": "Connections",
     "noData": "No data",
     "viewAll": "Back to all proxies"
+  },
+  "devices": {
+    "title": "Devices",
+    "distribution": "Device Traffic Distribution",
+    "noData": "No device data available",
+    "connections": "connections",
+    "total": "Total",
+    "download": "Download",
+    "upload": "Upload"
   },
   "rules": {
     "title": "Rules",

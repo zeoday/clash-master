@@ -730,7 +730,11 @@ export function BackendConfigDialog({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
+      <div
+        className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onOpenChange(false);
+        }}>
         <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

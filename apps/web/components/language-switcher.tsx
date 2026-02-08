@@ -38,7 +38,7 @@ export function LanguageSwitcher() {
           <span className="sr-only">{t("select")}</span>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="glass-card">
+      <DropdownMenuContent align="end">
         {locales.map((locale) => (
           <DropdownMenuItem
             key={locale}
@@ -52,3 +52,4 @@ export function LanguageSwitcher() {
     </DropdownMenu>
   );
 }
+

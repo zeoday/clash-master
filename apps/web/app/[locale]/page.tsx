@@ -119,7 +119,7 @@ const DomainsContent = memo(function DomainsContent({
   const t = useTranslations("domains");
   return (
     <div className="space-y-6">
-      <TopDomainsChart data={data?.topDomains || []} />
+      <TopDomainsChart activeBackendId={activeBackendId} />
       <Tabs defaultValue="domains" className="w-full">
         <TabsList className="glass">
           <TabsTrigger value="domains">{t("domainList")}</TabsTrigger>

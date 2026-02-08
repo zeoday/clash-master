@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import {
   BarChart,
   Bar,
@@ -13,15 +13,16 @@ import {
   LabelList,
 } from "recharts";
 import { useTranslations } from "next-intl";
-import { BarChart3 } from "lucide-react";
+import { BarChart3, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Favicon } from "@/components/favicon";
 import { formatBytes } from "@/lib/utils";
+import { api } from "@/lib/api";
 import type { DomainStats } from "@clashmaster/shared";
 
 interface TopDomainsChartProps {
-  data: DomainStats[];
+  activeBackendId?: number;
 }
 
 const TOP_OPTIONS = [10, 20, 50, 100] as const;
@@ -66,15 +67,48 @@ function renderCustomBarLabel(props: any) {
   );
 }
 
-export function TopDomainsChart({ data }: TopDomainsChartProps) {
+export function TopDomainsChart({ activeBackendId }: TopDomainsChartProps) {
   const t = useTranslations("domains");
   const commonT = useTranslations("stats");
   const [topN, setTopN] = useState<TopOption>(10);
+  const [domains, setDomains] = useState<DomainStats[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   // Track whether this is the initial render to only animate on first load
   const hasRenderedRef = useRef(false);
   // Track container width to hide labels on small screens
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
+
+  // Fetch domains data based on topN selection
+  const fetchData = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const result = await api.getDomains(activeBackendId, {
+        offset: 0,
+        limit: topN,
+        sortBy: "totalDownload",
+        sortOrder: "desc",
+      });
+      setDomains(result.data);
+    } catch (error) {
+      console.error("Failed to fetch top domains:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [activeBackendId, topN]);
+
+  // Fetch data when topN or activeBackendId changes
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Auto-refresh every 5 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchData();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -96,8 +130,8 @@ export function TopDomainsChart({ data }: TopDomainsChartProps) {
   const config = CHART_CONFIG[topN];
 
   const chartData = useMemo(() => {
-    if (!data) return [];
-    const result = data.slice(0, topN).map((domain, index) => ({
+    if (!domains || domains.length === 0) return [];
+    const result = domains.map((domain: DomainStats, index: number) => ({
       name: domain.domain,
       fullDomain: domain.domain,
       total: domain.totalDownload + domain.totalUpload,
@@ -112,7 +146,7 @@ export function TopDomainsChart({ data }: TopDomainsChartProps) {
       }, 800);
     }
     return result;
-  }, [data, topN]);
+  }, [domains]);
 
   const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {

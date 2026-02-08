@@ -536,9 +536,9 @@ function FlowRenderer({
       nodesDraggable={false}
       nodesConnectable={false}
       edgesFocusable={false}
-      zoomOnScroll={false}
+      zoomOnScroll={true}
       panOnScroll={false}
-      zoomOnDoubleClick={false}
+      zoomOnDoubleClick={true}
       className="chain-flow-graph">
       <Background color={isDark ? "#374151" : "#e5e7eb"} gap={20} size={1} />
       <Controls showInteractive={false} />

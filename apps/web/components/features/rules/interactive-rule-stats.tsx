@@ -879,7 +879,7 @@ export function InteractiveRuleStats({
                       </span>
 
                       <span className="flex-1 text-sm font-medium truncate" title={item.name}>
-                        {item.name}
+                        {item.name.length > 24 ? item.name.slice(0, 24) + "..." : item.name}
                       </span>
 
                       <span className="text-sm font-bold tabular-nums shrink-0 whitespace-nowrap">

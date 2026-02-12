@@ -997,12 +997,9 @@ function UnifiedRuleChainFlowInner({
     }
   }, [activeBackendId, wsEnabled]);
 
-  // Fetch active chain info when activePolicyOnly is ON
+  // Fetch active chain info for zero-traffic chain merge.
   useEffect(() => {
-    if (!activePolicyOnly) {
-      setActiveChainInfo(null);
-      return;
-    }
+    setActiveChainInfo(null);
     let cancelled = false;
 
     async function fetchActiveChains() {
@@ -1014,8 +1011,8 @@ function UnifiedRuleChainFlowInner({
 
         if (cancelled) return;
 
-        const { activeNodeNames, activeLinkKeys, activeChains } =
-          resolveActiveChains(gatewayProviders, gatewayRules);
+        const resolved = resolveActiveChains(gatewayProviders, gatewayRules);
+        setActiveChainInfo(resolved);
       } catch {
         if (!cancelled) setActivePolicyOnly(false);
       }
@@ -1032,7 +1029,7 @@ function UnifiedRuleChainFlowInner({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [activePolicyOnly, activeBackendId, autoRefresh]);
+  }, [activeBackendId, autoRefresh]);
 
   // When user selects a different rule, auto-disable showAll
   useEffect(() => {
@@ -1042,10 +1039,10 @@ function UnifiedRuleChainFlowInner({
     }
   }, [selectedRule]);
 
-  // Filter DAG when activePolicyOnly is ON
+  // Filter/Merge DAG
   const filteredData = useMemo((): AllChainFlowData | null => {
     if (!data) return null;
-    if (!activePolicyOnly || !activeChainInfo) return data;
+    if (!activeChainInfo) return data;
 
     const { activeNodeNames, activeLinkKeys, activeChains } = activeChainInfo;
 
@@ -1053,19 +1050,25 @@ function UnifiedRuleChainFlowInner({
     const existingNodeMap = new Map<string, number>();
     data.nodes.forEach((n, i) => existingNodeMap.set(n.name, i));
 
-    // Determine which existing nodes are active
+    // Determine which existing nodes to keep
     const keepNodeIndices = new Set<number>();
-    for (const [, idx] of existingNodeMap) {
-      if (activeNodeNames.has(data.nodes[idx].name)) {
-        keepNodeIndices.add(idx);
+    if (!activePolicyOnly) {
+      // Keep ALL existing nodes if not filtering
+      data.nodes.forEach((_, i) => keepNodeIndices.add(i));
+    } else {
+      // Keep only active nodes from existing data
+      for (const [, idx] of existingNodeMap) {
+        if (activeNodeNames.has(data.nodes[idx].name)) {
+          keepNodeIndices.add(idx);
+        }
       }
     }
 
-    // Build new nodes array (existing active + zero-traffic for missing)
+    // Build new nodes array (existing kept + zero-traffic for missing active)
     const newNodes: MergedChainNode[] = [];
     const nameToNewIdx = new Map<string, number>();
 
-    // First: existing active nodes
+    // First: existing kept nodes
     for (const idx of keepNodeIndices) {
       const node = data.nodes[idx];
       nameToNewIdx.set(node.name, newNodes.length);
@@ -1099,13 +1102,20 @@ function UnifiedRuleChainFlowInner({
       [];
     const linkKeySet = new Set<string>();
 
-    // Existing active links
+    // Existing links from data (filtered if needed)
     for (const link of data.links) {
       const srcName = data.nodes[link.source]?.name;
       const tgtName = data.nodes[link.target]?.name;
-      if (srcName && tgtName && activeLinkKeys.has(`${srcName}|${tgtName}`)) {
+      
+      // If filtering, check if link is in active keys. If not filtering, keep it.
+      const shouldKeepLink =
+        !activePolicyOnly ||
+        (srcName && tgtName && activeLinkKeys.has(`${srcName}|${tgtName}`));
+
+      if (shouldKeepLink && srcName && tgtName) {
         const newSrc = nameToNewIdx.get(srcName);
         const newTgt = nameToNewIdx.get(tgtName);
+        // Ensure both endpoints exist in our new node set
         if (newSrc !== undefined && newTgt !== undefined) {
           const key = `${newSrc}-${newTgt}`;
           if (!linkKeySet.has(key)) {

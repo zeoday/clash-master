@@ -285,6 +285,7 @@ export function Header({
             <TimeRangePicker
               value={timeRange}
               onChange={onTimeRangeChange}
+              showcaseMode={isShowcase}
             />
             <LanguageSwitcher />
 
@@ -308,6 +309,7 @@ export function Header({
               value={timeRange}
               onChange={onTimeRangeChange}
               className="w-[122px]"
+              showcaseMode={isShowcase}
             />
           </div>
 

@@ -48,11 +48,6 @@ function followChain(startGroup: string, groupNowMap: Map<string, string>): stri
 
 /**
  * Resolve active policy chains from Gateway providers and rules data.
- *
- * Uses the target proxy group name (rule.proxy) as the chain start,
- * NOT the internal rule type+payload (e.g. "RuleSet,netflix").
- * This matches how traffic data stores rule names (by proxy group).
- * Multiple low-level rules can target the same proxy group, so we deduplicate.
  */
 export function resolveActiveChains(
   providers: GatewayProvidersResponse,
@@ -70,9 +65,7 @@ export function resolveActiveChains(
     if (processedGroups.has(targetGroup)) continue;
     processedGroups.add(targetGroup);
 
-    // Build chain from the target proxy group: [group, now, now, ..., terminal]
     const chain = followChain(targetGroup, groupNowMap);
-
     activeChains.set(targetGroup, chain);
 
     for (const name of chain) {

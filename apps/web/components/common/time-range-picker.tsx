@@ -36,6 +36,7 @@ interface TimeRangePickerProps {
   value: TimeRange;
   onChange: (range: TimeRange, preset: PresetType) => void;
   className?: string;
+  showcaseMode?: boolean;
 }
 
 function toLocalTimeInputValue(date: Date): string {
@@ -131,6 +132,7 @@ export function TimeRangePicker({
   value,
   onChange,
   className,
+  showcaseMode,
 }: TimeRangePickerProps) {
   const locale = useLocale();
   const t = useTranslations("timeRangePicker");
@@ -263,6 +265,8 @@ export function TimeRangePicker({
     setOpen(false);
   };
 
+  const [lockIcon, setLockIcon] = useState(false);
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -283,151 +287,157 @@ export function TimeRangePicker({
           <ChevronDown className="w-4 h-4 text-muted-foreground" />
         </Button>
       </PopoverTrigger>
-
+      
       <PopoverContent
-        className="w-[calc(100vw-2rem)] sm:w-[352px] max-w-[calc(100vw-1rem)] rounded-xl border border-border/60 bg-popover text-popover-foreground p-4 shadow-xs space-y-4"
-        align={isMobile ? "center" : "end"}
-        sideOffset={8}
-        collisionPadding={12}>
-        <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground ">
-            {t("quickRange")}
-          </Label>
-          <div className="grid grid-cols-4 gap-2 mt-3">
-            {quickPresets.map((preset) => {
-              const active = selectedPreset === preset.value;
-              return (
-                <Button
-                  key={preset.value}
-                  size="sm"
-                  variant="outline"
-                  className={cn(
-                    "rounded-full transition-colors",
-                    active
-                      ? "bg-emerald-500 text-white border-emerald-500 hover:bg-emerald-500/90 hover:text-white"
-                      : "bg-secondary/50 border-border/70 text-muted-foreground hover:bg-secondary hover:text-foreground",
-                  )}
-                  onClick={() => applyQuickPreset(preset.value)}>
-                  {preset.label}
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="space-y-3 border-t border-border pt-3">
-          <div className="text-xs text-muted-foreground">
-            {t("customRange")}
-          </div>
-
-          <div className="grid grid-cols-[1fr_auto] gap-2">
-            <div className="space-y-2">
-              <Label htmlFor="time-range-from-date" className="text-xs">
-                {t("startDate")}
-              </Label>
-              <Popover open={openFromDate} onOpenChange={setOpenFromDate}>
-                <PopoverTrigger asChild>
-                  <Button
-                    id="time-range-from-date"
-                    variant="outline"
-                    className="w-full justify-between font-normal">
-                    {formatDateButton(fromDate, localeCode, t("pickDate"))}
-                    <CalendarIcon className="w-4 h-4 text-muted-foreground" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  className="w-auto overflow-hidden rounded-xl border border-border/60 bg-popover text-popover-foreground p-0 shadow-xs z-[90]"
-                  align="start"
-                  sideOffset={6}
-                  collisionPadding={12}>
-                  <Calendar
-                    locale={calendarLocale}
-                    mode="single"
-                    selected={fromDate}
-                    onSelect={(date) => {
-                      setFromDate(date);
-                      setOpenFromDate(false);
-                    }}
-                  />
-                </PopoverContent>
-              </Popover>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="time-range-from-time" className="text-xs">
-                {t("time")}
-              </Label>
-              <Input
-                id="time-range-from-time"
-                type="time"
-                step={60}
-                value={fromTime}
-                onChange={(e) => setFromTime(e.target.value)}
-                className="bg-background appearance-none [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-[1fr_auto] gap-2">
-            <div className="space-y-2">
-              <Label htmlFor="time-range-to-date" className="text-xs">
-                {t("endDate")}
-              </Label>
-              <Popover open={openToDate} onOpenChange={setOpenToDate}>
-                <PopoverTrigger asChild>
-                  <Button
-                    id="time-range-to-date"
-                    variant="outline"
-                    className="w-full justify-between font-normal">
-                    {formatDateButton(toDate, localeCode, t("pickDate"))}
-                    <CalendarIcon className="w-4 h-4 text-muted-foreground" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  className="w-auto overflow-hidden rounded-xl border border-border/60 bg-popover text-popover-foreground p-0 shadow-xs z-[90]"
-                  align="start"
-                  sideOffset={6}
-                  collisionPadding={12}>
-                  <Calendar
-                    locale={calendarLocale}
-                    mode="single"
-                    selected={toDate}
-                    disabled={fromDate ? { before: fromDate } : undefined}
-                    onSelect={(date) => {
-                      setToDate(date);
-                      setOpenToDate(false);
-                    }}
-                  />
-                </PopoverContent>
-              </Popover>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="time-range-to-time" className="text-xs">
-                {t("time")}
-              </Label>
-              <Input
-                id="time-range-to-time"
-                type="time"
-                step={60}
-                value={toTime}
-                onChange={(e) => setToTime(e.target.value)}
-                className="bg-background appearance-none [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none"
-              />
-            </div>
-          </div>
-
-          <div className="flex gap-2 pt-1">
-            <Button
-              size="sm"
-              className="flex-1 bg-blue-600 hover:bg-blue-600/90 text-white"
-              onClick={applyCustom}>
-              {t("applyCustom")}
-            </Button>
-            <Button size="sm" variant="outline" onClick={resetToDefault}>
-              <RotateCcw className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-      </PopoverContent>
+              className="w-[calc(100vw-2rem)] sm:w-[352px] max-w-[calc(100vw-1rem)] rounded-xl border border-border/60 bg-popover text-popover-foreground p-4 shadow-xs space-y-4"
+              align={isMobile ? "center" : "end"}
+              sideOffset={8}
+              collisionPadding={12}>
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground ">
+                  {t("quickRange")}
+                </Label>
+                <div className="grid grid-cols-4 gap-2 mt-3">
+                  {quickPresets.map((preset) => {
+                    const active = selectedPreset === preset.value;
+                    // In showcase mode, disable presets larger than 24h (7d, 30d)
+                    // We allow "today" as it is within 24h context usually, or at least acceptable
+                    const isDisabled = showcaseMode && (preset.value === "7d" || preset.value === "30d");
+                    
+                    return (
+                      <Button
+                        key={preset.value}
+                        size="sm"
+                        variant="outline"
+                        disabled={isDisabled}
+                        className={cn(
+                          "rounded-full transition-colors",
+                          active
+                            ? "bg-emerald-500 text-white border-emerald-500 hover:bg-emerald-500/90 hover:text-white"
+                            : "bg-secondary/50 border-border/70 text-muted-foreground hover:bg-secondary hover:text-foreground",
+                          isDisabled && "opacity-50 cursor-not-allowed"
+                        )}
+                        onClick={() => applyQuickPreset(preset.value)}>
+                        {preset.label}
+                      </Button>
+                    );
+                  })}
+                </div>
+              </div>
+      
+              <div className="space-y-3 border-t border-border pt-3">
+                  <div className="text-xs text-muted-foreground">
+                    {t("customRange")}
+                  </div>
+        
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="time-range-from-date" className="text-xs">
+                        {t("startDate")}
+                      </Label>
+                      <Popover open={openFromDate} onOpenChange={setOpenFromDate}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            id="time-range-from-date"
+                            variant="outline"
+                            className="w-full justify-between font-normal">
+                            {formatDateButton(fromDate, localeCode, t("pickDate"))}
+                            <CalendarIcon className="w-4 h-4 text-muted-foreground" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          className="w-auto overflow-hidden rounded-xl border border-border/60 bg-popover text-popover-foreground p-0 shadow-xs z-[90]"
+                          align="start"
+                          sideOffset={6}
+                          collisionPadding={12}>
+                          <Calendar
+                            locale={calendarLocale}
+                            mode="single"
+                            selected={fromDate}
+                            onSelect={(date) => {
+                              setFromDate(date);
+                              setOpenFromDate(false);
+                            }}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="time-range-from-time" className="text-xs">
+                        {t("time")}
+                      </Label>
+                      <Input
+                        id="time-range-from-time"
+                        type="time"
+                        step={60}
+                        value={fromTime}
+                        onChange={(e) => setFromTime(e.target.value)}
+                        className="bg-background appearance-none [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none"
+                      />
+                    </div>
+                  </div>
+        
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="time-range-to-date" className="text-xs">
+                        {t("endDate")}
+                      </Label>
+                      <Popover open={openToDate} onOpenChange={setOpenToDate}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            id="time-range-to-date"
+                            variant="outline"
+                            className="w-full justify-between font-normal">
+                            {formatDateButton(toDate, localeCode, t("pickDate"))}
+                            <CalendarIcon className="w-4 h-4 text-muted-foreground" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          className="w-auto overflow-hidden rounded-xl border border-border/60 bg-popover text-popover-foreground p-0 shadow-xs z-[90]"
+                          align="start"
+                          sideOffset={6}
+                          collisionPadding={12}>
+                          <Calendar
+                            locale={calendarLocale}
+                            mode="single"
+                            selected={toDate}
+                            disabled={fromDate ? { before: fromDate } : undefined}
+                            onSelect={(date) => {
+                              setToDate(date);
+                              setOpenToDate(false);
+                            }}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="time-range-to-time" className="text-xs">
+                        {t("time")}
+                      </Label>
+                      <Input
+                        id="time-range-to-time"
+                        type="time"
+                        step={60}
+                        value={toTime}
+                        onChange={(e) => setToTime(e.target.value)}
+                        className="bg-background appearance-none [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none"
+                      />
+                    </div>
+                  </div>
+        
+                  <div className="flex gap-2 pt-1">
+                    <Button
+                      size="sm"
+                      className="flex-1 bg-blue-600 hover:bg-blue-600/90 text-white"
+                      onClick={applyCustom}>
+                      {t("applyCustom")}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={resetToDefault}>
+                      <RotateCcw className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+            </PopoverContent>
     </Popover>
   );
 }

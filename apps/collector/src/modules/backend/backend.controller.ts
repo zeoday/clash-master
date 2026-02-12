@@ -104,9 +104,7 @@ const backendController: FastifyPluginAsync = async (fastify: FastifyInstance): 
 
   // Set active backend
   fastify.post<{ Params: BackendParams }>('/:id/activate', async (request, reply) => {
-    if (fastify.authService.isShowcaseMode()) {
-      return reply.status(403).send({ error: 'Forbidden' });
-    }
+    // fastify.authService.isShowcaseMode() check removed to allow switching in demo mode
 
     const { id } = request.params;
     const backendId = parseInt(id);

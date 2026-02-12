@@ -27,10 +27,56 @@ function getBackendId(request: FastifyRequest, service: StatsService): number | 
 }
 
 // Helper function to parse time range
-function getTimeRange(request: FastifyRequest, reply: FastifyReply): TimeRange | null {
+function getTimeRange(request: FastifyRequest, reply: FastifyReply, isShowcaseMode = false): TimeRange | null {
   const query = request.query as Record<string, string | undefined>;
-  const { start, end } = query;
-  
+  let { start, end } = query;
+
+  if (isShowcaseMode) {
+    // In showcase mode, we clamp the start time to be no older than 24 hours ago
+    const now = new Date();
+    const minStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    
+    // Default to last 24h if no params
+    if (!start) {
+      return {
+        start: minStart.toISOString(),
+        end: now.toISOString(),
+        active: true,
+      };
+    }
+
+    // Parse provided start/end
+    let startDate = new Date(start);
+    let endDate = end ? new Date(end) : now;
+
+    if (Number.isNaN(startDate.getTime())) {
+       // If invalid start, default to 24h
+       startDate = minStart;
+       endDate = now;
+    }
+
+    if (Number.isNaN(endDate.getTime())) {
+      endDate = now;
+    }
+
+    // Clamp start
+    if (startDate < minStart) {
+      startDate = minStart;
+    }
+    
+    // Ensure start <= end
+    if (startDate > endDate) {
+      startDate = minStart;
+      endDate = now;
+    }
+
+    return {
+      start: startDate.toISOString(),
+      end: endDate.toISOString(),
+      active: true,
+    };
+  }
+
   if (!start && !end) {
     return { active: false };
   }
@@ -63,7 +109,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get summary statistics for a specific backend
   fastify.get('/summary', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
     
     if (timeRange === null) {
       return;
@@ -92,7 +138,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get domain statistics for a specific backend (paginated)
   fastify.get('/domains', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -119,7 +165,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get IP statistics for a specific backend (paginated)
   fastify.get('/ips', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -146,7 +192,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get per-proxy traffic breakdown for a specific domain
   fastify.get('/domains/proxy-stats', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -168,7 +214,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get IP details for a specific domain
   fastify.get('/domains/ip-details', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -191,7 +237,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get per-proxy traffic breakdown for a specific IP
   fastify.get('/ips/proxy-stats', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -213,7 +259,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get domain details for a specific IP
   fastify.get('/ips/domain-details', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -236,7 +282,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get domains for a specific proxy/chain
   fastify.get('/proxies/domains', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -259,7 +305,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get IPs for a specific proxy/chain
   fastify.get('/proxies/ips', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -282,7 +328,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get proxy/chain statistics for a specific backend
   fastify.get('/proxies', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
     
     if (timeRange === null) {
       return;
@@ -298,7 +344,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get rule statistics for a specific backend
   fastify.get('/rules', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
     
     if (timeRange === null) {
       return;
@@ -314,7 +360,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get domains for a specific rule
   fastify.get('/rules/domains', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -337,7 +383,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get IPs for a specific rule
   fastify.get('/rules/ips', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -360,7 +406,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get per-proxy traffic breakdown for a specific domain under a specific rule
   fastify.get('/rules/domains/proxy-stats', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -382,7 +428,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get IP details for a specific domain under a specific rule
   fastify.get('/rules/domains/ip-details', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -405,7 +451,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get per-proxy traffic breakdown for a specific IP under a specific rule
   fastify.get('/rules/ips/proxy-stats', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -427,7 +473,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get domain details for a specific IP under a specific rule
   fastify.get('/rules/ips/domain-details', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -450,7 +496,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get rule chain flow for a specific rule
   fastify.get('/rules/chain-flow', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -472,7 +518,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get all rule chain flows merged into unified DAG
   fastify.get('/rules/chain-flow-all', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
 
     if (timeRange === null) {
       return;
@@ -499,7 +545,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get country traffic statistics for a specific backend
   fastify.get('/countries', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
     
     if (timeRange === null) {
       return;
@@ -519,7 +565,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get device statistics for a specific backend
   fastify.get('/devices', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
     
     if (backendId === null) {
       return reply.status(404).send({ error: 'No backend specified or active' });
@@ -538,7 +584,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get domains for a specific device
   fastify.get('/devices/domains', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
     
     if (timeRange === null) {
       return;
@@ -557,7 +603,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get IPs for a specific device
   fastify.get('/devices/ips', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
     
     if (timeRange === null) {
       return;
@@ -576,7 +622,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get hourly statistics for a specific backend
   fastify.get('/hourly', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
     
     if (timeRange === null) {
       return;
@@ -595,7 +641,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get traffic trend for a specific backend
   fastify.get('/trend', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
     
     if (timeRange === null) {
       return;
@@ -614,7 +660,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
   // Get traffic trend aggregated by time buckets for chart display
   fastify.get('/trend/aggregated', async (request, reply) => {
     const backendId = getBackendId(request, service);
-    const timeRange = getTimeRange(request, reply);
+    const timeRange = getTimeRange(request, reply, fastify.authService.isShowcaseMode());
     
     if (timeRange === null) {
       return;
@@ -644,6 +690,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     const limitNum = service.parseLimit(limit, 100, 2000);
     return service.getRecentConnections(backendId, limitNum);
   });
+
 };
 
 export default statsController;

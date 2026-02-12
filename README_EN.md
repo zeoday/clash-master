@@ -31,6 +31,13 @@
 ![Neko Master Rules](./assets/neko-master-rules.png)
 ![Neko Master Regions](./assets/neko-master-regions.png)
 
+## 🌐 Live Demo
+
+**Demo URL**: https://neko-master.is26.com  
+**Password**: `neko2026`
+
+> The demo is in read-only showcase mode with limited functionality.
+
 ## About the Name
 
 **Neko** (ねこ) means "cat" in Japanese, pronounced as **/ˈneɪkoʊ/** (NEH-ko).

@@ -36,6 +36,13 @@
 ![Neko Master Rules](./assets/neko-master-rules.png)
 ![Neko Master Regions](./assets/neko-master-regions.png)
 
+## 🌐 在线演示
+
+**演示地址**: https://neko-master.is26.com  
+**访问密码**: `neko2026`
+
+> 演示站为只读展示模式，部分功能受限。
+
 ## 关于名称
 
 **Neko**（ねこ）在日语中意为“猫”，

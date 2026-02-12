@@ -7,10 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-02-13
+
 ### Added
 - Time range restrictions for showcase mode stats display
 - Backend switching capability in showcase mode
 - Enhanced rule chain flow visualization with zero-traffic chain merging
+
+### Changed
+- Improved Traffic Trend skeleton loading to prevent empty state flickering
+- Refined Top Domains/Proxies/Regions skeleton heights to match actual content
+
+### Fixed
+- Hydration Mismatch error caused by `Math.random()` in skeleton screens
 
 ## [1.2.0] - 2026-02-12
 

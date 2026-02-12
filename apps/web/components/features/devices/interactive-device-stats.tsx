@@ -3,25 +3,25 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { BarChart3, Link2, Smartphone } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { useQuery } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, BarChart, Bar, XAxis, YAxis, Cell as BarCell, LabelList } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatBytes, formatNumber } from "@/lib/utils";
 import { cn } from "@/lib/utils";
-import { api, type TimeRange } from "@/lib/api";
+import { type TimeRange } from "@/lib/api";
 import {
   getDeviceDomainsQueryKey,
   getDeviceIPsQueryKey,
 } from "@/lib/stats-query-keys";
 import { useStableTimeRange } from "@/lib/hooks/use-stable-time-range";
-import { keepPreviousByIdentity } from "@/lib/query-placeholder";
 import { useStatsWebSocket } from "@/lib/websocket";
 import { Favicon } from "@/components/common";
 import { DomainStatsTable, IPStatsTable } from "@/components/features/stats/table";
 import { InsightChartSkeleton } from "@/components/ui/insight-skeleton";
 import { COLORS, type PageSize } from "@/lib/stats-utils";
+import { useDeviceDomains, useDeviceIPs } from "@/hooks/api/use-devices";
 import type { DeviceStats, DomainStats, IPStats, StatsSummary } from "@neko-master/shared";
 
 interface InteractiveDeviceStatsProps {
@@ -55,13 +55,12 @@ export function InteractiveDeviceStats({
   const domainsT = useTranslations("domains");
   const backendT = useTranslations("dashboard");
   const detailTimeRange = useStableTimeRange(timeRange);
+  const queryClient = useQueryClient();
   
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("domains");
   const [detailPageSize, setDetailPageSize] = useState<PageSize>(10);
   const [showDomainBarLabels, setShowDomainBarLabels] = useState(true);
-  const [wsDeviceDomains, setWsDeviceDomains] = useState<DomainStats[] | null>(null);
-  const [wsDeviceIPs, setWsDeviceIPs] = useState<IPStats[] | null>(null);
 
   useEffect(() => {
     const media = window.matchMedia("(min-width: 640px)");
@@ -113,71 +112,40 @@ export function InteractiveDeviceStats({
     onMessage: useCallback((stats: StatsSummary) => {
       if (!selectedDevice) return;
       if (stats.deviceDetailSourceIP !== selectedDevice) return;
+      
       if (stats.deviceDomains) {
-        setWsDeviceDomains(stats.deviceDomains);
+        queryClient.setQueryData(
+          getDeviceDomainsQueryKey(selectedDevice, activeBackendId, detailTimeRange),
+          stats.deviceDomains
+        );
       }
       if (stats.deviceIPs) {
-        setWsDeviceIPs(stats.deviceIPs);
+        queryClient.setQueryData(
+          getDeviceIPsQueryKey(selectedDevice, activeBackendId, detailTimeRange),
+          stats.deviceIPs
+        );
       }
-    }, [selectedDevice]),
+    }, [selectedDevice, activeBackendId, detailTimeRange, queryClient]),
   });
 
-  useEffect(() => {
-    setWsDeviceDomains(null);
-    setWsDeviceIPs(null);
-  }, [selectedDevice, activeBackendId]);
-
-  const hasWsDeviceDetails =
-    wsDetailEnabled &&
-    wsDetailStatus === "connected" &&
-    wsDeviceDomains !== null &&
-    wsDeviceIPs !== null;
-
-  const deviceDomainsQuery = useQuery({
-    queryKey: getDeviceDomainsQueryKey(selectedDevice, activeBackendId, detailTimeRange),
-    queryFn: () =>
-      api.getDeviceDomains(
-        selectedDevice!,
-        activeBackendId,
-        detailTimeRange,
-      ),
-    enabled: !!activeBackendId && !!selectedDevice && !hasWsDeviceDetails,
-    placeholderData: (previousData, previousQuery) =>
-      keepPreviousByIdentity(previousData, previousQuery, {
-        sourceIP: selectedDevice ?? "",
-        backendId: activeBackendId ?? null,
-      }),
+  const { data: domainsData, isLoading: domainsLoading } = useDeviceDomains({
+    sourceIP: selectedDevice ?? undefined,
+    activeBackendId,
+    range: detailTimeRange,
+    enabled: !wsDetailEnabled || wsDetailStatus !== "connected",
   });
 
-  const deviceIPsQuery = useQuery({
-    queryKey: getDeviceIPsQueryKey(selectedDevice, activeBackendId, detailTimeRange),
-    queryFn: () =>
-      api.getDeviceIPs(
-        selectedDevice!,
-        activeBackendId,
-        detailTimeRange,
-      ),
-    enabled: !!activeBackendId && !!selectedDevice && !hasWsDeviceDetails,
-    placeholderData: (previousData, previousQuery) =>
-      keepPreviousByIdentity(previousData, previousQuery, {
-        sourceIP: selectedDevice ?? "",
-        backendId: activeBackendId ?? null,
-      }),
+  const { data: ipsData, isLoading: ipsLoading } = useDeviceIPs({
+    sourceIP: selectedDevice ?? undefined,
+    activeBackendId,
+    range: detailTimeRange,
+    enabled: !wsDetailEnabled || wsDetailStatus !== "connected",
   });
 
-  const deviceDomains = hasWsDeviceDetails
-    ? wsDeviceDomains ?? []
-    : deviceDomainsQuery.data ?? wsDeviceDomains ?? [];
-  const deviceIPs = hasWsDeviceDetails
-    ? wsDeviceIPs ?? []
-    : deviceIPsQuery.data ?? wsDeviceIPs ?? [];
-  const hasDetailSnapshot =
-    hasWsDeviceDetails ||
-    wsDeviceDomains !== null ||
-    wsDeviceIPs !== null ||
-    deviceDomainsQuery.data !== undefined ||
-    deviceIPsQuery.data !== undefined;
-  const loading = !!selectedDevice && !hasDetailSnapshot;
+  const deviceDomains = domainsData ?? [];
+  const deviceIPs = ipsData ?? [];
+  
+  const loading = !!selectedDevice && (domainsLoading || ipsLoading) && deviceDomains.length === 0 && deviceIPs.length === 0;
 
   const handleDeviceClick = useCallback((rawName: string) => {
     if (selectedDevice !== rawName) {

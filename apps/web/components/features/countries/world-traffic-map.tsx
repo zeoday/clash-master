@@ -19,8 +19,7 @@ interface WorldTrafficMapProps {
 }
 
 // World map GeoJSON URL (lightweight topojson)
-const GEO_URL =
-  "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
+const GEO_URL = "/topojson/countries-110m.json";
 
 // Country name mappings (ISO code -> GeoJSON name)
 const COUNTRY_NAME_MAPPING: Record<string, string> = {

@@ -231,3 +231,10 @@ export interface AggregatedUpdateEvent {
 }
 
 export type WebSocketEvent = StatsUpdateEvent | AggregatedUpdateEvent;
+
+export interface AuthState {
+  enabled: boolean;
+  hasToken: boolean;
+  forceAccessControlOff?: boolean;
+  showcaseMode?: boolean;
+}

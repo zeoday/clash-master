@@ -2,15 +2,9 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
+import type { AuthState } from "@neko-master/shared";
 
 const AUTH_TOKEN_KEY = "neko-master-auth-token";
-
-export interface AuthState {
-  enabled: boolean;
-  hasToken: boolean;
-  forceAccessControlOff?: boolean;
-  showcaseMode?: boolean;
-}
 
 // API functions
 async function fetchAuthState(): Promise<AuthState> {

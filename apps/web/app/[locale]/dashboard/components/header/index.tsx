@@ -39,7 +39,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
-import { TimeRangePicker, LanguageSwitcher, ThemeToggle } from "@/components/common";
+import { TimeRangePicker, LanguageSwitcher, ThemeToggle, ClientOnly } from "@/components/common";
 import { cn } from "@/lib/utils";
 import type { TimeRange } from "@/lib/api";
 import type { BackendStatus, TimePreset } from "@/lib/types/dashboard";
@@ -282,11 +282,13 @@ export function Header({
 
           {/* Desktop: Language & Theme */}
           <div className="hidden sm:flex items-center gap-1">
-            <TimeRangePicker
-              value={timeRange}
-              onChange={onTimeRangeChange}
-              showcaseMode={isShowcase}
-            />
+            <ClientOnly fallback={<div className="h-9 w-[152px] bg-secondary/45 rounded-xl" />}>
+              <TimeRangePicker
+                value={timeRange}
+                onChange={onTimeRangeChange}
+                showcaseMode={isShowcase}
+              />
+            </ClientOnly>
             <LanguageSwitcher />
 
             <ThemeToggle />
@@ -305,12 +307,14 @@ export function Header({
 
           {/* Mobile: Time range picker */}
           <div className="sm:hidden">
-            <TimeRangePicker
-              value={timeRange}
-              onChange={onTimeRangeChange}
-              className="w-[122px]"
-              showcaseMode={isShowcase}
-            />
+            <ClientOnly fallback={<div className="h-9 w-[122px] bg-secondary/45 rounded-xl" />}>
+              <TimeRangePicker
+                value={timeRange}
+                onChange={onTimeRangeChange}
+                className="w-[122px]"
+                showcaseMode={isShowcase}
+              />
+            </ClientOnly>
           </div>
 
           {/* Mobile: Backend warning in top actions */}

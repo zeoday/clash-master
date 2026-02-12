@@ -11,11 +11,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { authKeys } from "./auth-queries";
 
-interface AuthState {
-  enabled: boolean;
-  hasToken: boolean;
-  forceAccessControlOff?: boolean;
-}
+import type { AuthState } from "@neko-master/shared";
 
 interface AuthContextType {
   isAuthenticated: boolean;

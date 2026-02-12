@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React, { useMemo, useRef } from "react";
 import {
   AreaChart,
   Area,
@@ -42,6 +42,12 @@ export const TrafficTrendChart = React.memo(
   }: TrafficTrendChartProps) {
     const t = useTranslations("trend");
     const chartT = useTranslations("chart");
+    
+    // Track if we've ever received data to avoid showing empty state on initial load
+    const hasEverReceivedData = useRef(false);
+    if (data.length > 0) {
+      hasEverReceivedData.current = true;
+    }
 
     const selectorOptions = useMemo(() => {
       const allOptions: { value: TimeRange; label: string }[] = [
@@ -165,15 +171,64 @@ export const TrafficTrendChart = React.memo(
       [chartT, t, granularity],
     );
 
-    // If no data, show empty state
-    if (!isLoading && chartData.length === 0) {
+    // Loading skeleton - show when loading or on initial load with no data yet
+    // This prevents flickering from empty state to skeleton on first load
+    if ((isLoading && chartData.length === 0) || (chartData.length === 0 && !hasEverReceivedData.current)) {
       return (
         <Card className="h-full">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-              <Activity className="w-4 h-4" />
-              {t("title")}
-            </CardTitle>
+            <div className="flex items-center justify-between flex-wrap gap-3">
+                <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                <Activity className="w-4 h-4" />
+                {t("title")}
+                </CardTitle>
+                <div className="h-7 w-[168px] bg-muted/50 rounded-lg animate-pulse hidden lg:block" />
+            </div>
+             <div className="hidden lg:flex items-center gap-6 mt-3">
+                <div className="h-4 w-24 bg-muted/50 rounded animate-pulse" />
+                <div className="h-4 w-24 bg-muted/50 rounded animate-pulse" />
+                <div className="h-4 w-24 bg-muted/50 rounded animate-pulse ml-auto" />
+             </div>
+             <div className="grid grid-cols-3 gap-2 mt-2 lg:hidden">
+                <div className="h-10 bg-muted/50 rounded animate-pulse" />
+                <div className="h-10 bg-muted/50 rounded animate-pulse" />
+                <div className="h-10 bg-muted/50 rounded animate-pulse" />
+             </div>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[200px] w-full bg-muted/20 rounded-xl animate-pulse flex items-end justify-between px-4 pb-4 gap-2">
+                 {/* Use fixed heights to avoid hydration mismatch between SSR and client */}
+                 {[35, 62, 28, 75, 45, 58, 32, 68, 40, 55, 30, 65].map((height, i) => (
+                    <div key={i} className="w-full bg-muted/40 rounded-t" style={{ height: `${height}%` }} />
+                 ))}
+            </div>
+          </CardContent>
+        </Card>
+      );
+    }
+
+    // If no data and we've previously received data, show empty state
+    // Otherwise (initial load with no data), keep showing skeleton to avoid flickering
+    if (!isLoading && chartData.length === 0 && hasEverReceivedData.current) {
+      return (
+        <Card className="h-full">
+          <CardHeader className="pb-2">
+             <div className="flex items-center justify-between flex-wrap gap-3">
+              <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                <Activity className="w-4 h-4" />
+                {t("title")}
+              </CardTitle>
+              {/* Maintain height of selector */}
+              <div className="h-7 w-[168px] hidden lg:block" />
+            </div>
+            
+            {/* Maintain height of stats row */}
+             <div className="hidden lg:flex items-center gap-6 mt-3 opacity-0 pointer-events-none" aria-hidden="true">
+                <div className="h-4 w-24" />
+             </div>
+             <div className="grid grid-cols-3 gap-2 mt-2 lg:hidden opacity-0 pointer-events-none" aria-hidden="true">
+                <div className="h-10" />
+             </div>
           </CardHeader>
           <CardContent>
             <div className="h-[200px] rounded-xl border border-dashed border-border/60 bg-card/20 flex flex-col items-center justify-center text-center px-4">

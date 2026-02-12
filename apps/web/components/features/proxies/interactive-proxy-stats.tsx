@@ -3,7 +3,7 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { BarChart3, Link2, Waypoints } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, BarChart, Bar, XAxis, YAxis, Cell as BarCell, LabelList } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -11,20 +11,19 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { CountryFlag, extractCountryCodeFromText, stripLeadingFlagEmoji } from "@/components/features/countries/country-flag";
 import { formatBytes, formatNumber } from "@/lib/utils";
 import { cn } from "@/lib/utils";
-import { api, type TimeRange } from "@/lib/api";
+import { type TimeRange } from "@/lib/api";
 import { useStableTimeRange } from "@/lib/hooks/use-stable-time-range";
-import { keepPreviousByIdentity } from "@/lib/query-placeholder";
 import { useStatsWebSocket } from "@/lib/websocket";
 import {
-  getProxiesQueryKey,
   getProxyDomainsQueryKey,
   getProxyIPsQueryKey,
 } from "@/lib/stats-query-keys";
+import { useProxies, useProxyDomains, useProxyIPs } from "@/hooks/api/use-proxies";
 import { Favicon } from "@/components/common";
 import { DomainStatsTable, IPStatsTable } from "@/components/features/stats/table";
 import { InsightChartSkeleton, InsightThreePanelSkeleton } from "@/components/ui/insight-skeleton";
 import { COLORS, type PageSize } from "@/lib/stats-utils";
-import type { DomainStats, IPStats, ProxyStats, StatsSummary } from "@neko-master/shared";
+import type { ProxyStats, StatsSummary } from "@neko-master/shared";
 
 interface InteractiveProxyStatsProps {
   data?: ProxyStats[];
@@ -79,24 +78,24 @@ export function InteractiveProxyStats({
   const t = useTranslations("proxies");
   const domainsT = useTranslations("domains");
   const backendT = useTranslations("dashboard");
+  const queryClient = useQueryClient();
   const stableTimeRange = useStableTimeRange(timeRange);
   const detailTimeRange = stableTimeRange;
 
-  const proxyListQuery = useQuery({
-    queryKey: getProxiesQueryKey(activeBackendId, 50, stableTimeRange),
-    queryFn: () => api.getProxies(activeBackendId, 50, stableTimeRange),
+  const { data: listData, isLoading: listQueryLoading } = useProxies({
+    activeBackendId,
+    limit: 50,
+    range: stableTimeRange,
     enabled: !data && !!activeBackendId,
-    placeholderData: keepPreviousData,
   });
-  const proxyData = data ?? proxyListQuery.data ?? [];
-  const listLoading = !data && proxyListQuery.isLoading && !proxyListQuery.data;
+  
+  const proxyData = data ?? listData ?? [];
+  const listLoading = !data && listQueryLoading && !listData;
   
   const [selectedProxy, setSelectedProxy] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("domains");
   const [detailPageSize, setDetailPageSize] = useState<PageSize>(10);
   const [showDomainBarLabels, setShowDomainBarLabels] = useState(true);
-  const [wsProxyDomains, setWsProxyDomains] = useState<DomainStats[] | null>(null);
-  const [wsProxyIPs, setWsProxyIPs] = useState<IPStats[] | null>(null);
 
   useEffect(() => {
     const media = window.matchMedia("(min-width: 640px)");
@@ -149,71 +148,39 @@ export function InteractiveProxyStats({
     onMessage: useCallback((stats: StatsSummary) => {
       if (!selectedProxy) return;
       if (stats.proxyDetailChain !== selectedProxy) return;
+      
       if (stats.proxyDomains) {
-        setWsProxyDomains(stats.proxyDomains);
+        queryClient.setQueryData(
+          getProxyDomainsQueryKey(selectedProxy, activeBackendId, detailTimeRange),
+          stats.proxyDomains
+        );
       }
       if (stats.proxyIPs) {
-        setWsProxyIPs(stats.proxyIPs);
+        queryClient.setQueryData(
+          getProxyIPsQueryKey(selectedProxy, activeBackendId, detailTimeRange),
+          stats.proxyIPs
+        );
       }
-    }, [selectedProxy]),
+    }, [selectedProxy, activeBackendId, detailTimeRange, queryClient]),
   });
 
-  useEffect(() => {
-    setWsProxyDomains(null);
-    setWsProxyIPs(null);
-  }, [selectedProxy, activeBackendId]);
-
-  const hasWsProxyDetails =
-    wsDetailEnabled &&
-    wsDetailStatus === "connected" &&
-    wsProxyDomains !== null &&
-    wsProxyIPs !== null;
-
-  const proxyDomainsQuery = useQuery({
-    queryKey: getProxyDomainsQueryKey(selectedProxy, activeBackendId, detailTimeRange),
-    queryFn: () =>
-      api.getProxyDomains(
-        selectedProxy!,
-        activeBackendId,
-        detailTimeRange,
-      ),
-    enabled: !!activeBackendId && !!selectedProxy && !hasWsProxyDetails,
-    placeholderData: (previousData, previousQuery) =>
-      keepPreviousByIdentity(previousData, previousQuery, {
-        chain: selectedProxy ?? "",
-        backendId: activeBackendId ?? null,
-      }),
+  const { data: proxyDomains = [], isLoading: domainsLoading } = useProxyDomains({
+    chain: selectedProxy,
+    activeBackendId,
+    range: detailTimeRange,
+    enabled: !!selectedProxy,
   });
 
-  const proxyIPsQuery = useQuery({
-    queryKey: getProxyIPsQueryKey(selectedProxy, activeBackendId, detailTimeRange),
-    queryFn: () =>
-      api.getProxyIPs(
-        selectedProxy!,
-        activeBackendId,
-        detailTimeRange,
-      ),
-    enabled: !!activeBackendId && !!selectedProxy && !hasWsProxyDetails,
-    placeholderData: (previousData, previousQuery) =>
-      keepPreviousByIdentity(previousData, previousQuery, {
-        chain: selectedProxy ?? "",
-        backendId: activeBackendId ?? null,
-      }),
+  const { data: proxyIPs = [], isLoading: ipsLoading } = useProxyIPs({
+    chain: selectedProxy,
+    activeBackendId,
+    range: detailTimeRange,
+    enabled: !!selectedProxy,
   });
 
-  const proxyDomains = hasWsProxyDetails
-    ? wsProxyDomains ?? []
-    : proxyDomainsQuery.data ?? wsProxyDomains ?? [];
-  const proxyIPs = hasWsProxyDetails
-    ? wsProxyIPs ?? []
-    : proxyIPsQuery.data ?? wsProxyIPs ?? [];
-  const hasDetailSnapshot =
-    hasWsProxyDetails ||
-    wsProxyDomains !== null ||
-    wsProxyIPs !== null ||
-    proxyDomainsQuery.data !== undefined ||
-    proxyIPsQuery.data !== undefined;
-  const loading = !!selectedProxy && !hasDetailSnapshot;
+  // Since we rely on cache updates from WS, we don't need dedicated state to track "hasWsDetails"
+  // The cache IS the source of truth.
+  const loading = !!selectedProxy && (domainsLoading || ipsLoading) && proxyDomains.length === 0 && proxyIPs.length === 0;
 
   const handleProxyClick = useCallback((rawName: string) => {
     if (selectedProxy !== rawName) {

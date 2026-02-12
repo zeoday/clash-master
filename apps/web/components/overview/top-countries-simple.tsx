@@ -13,6 +13,7 @@ interface TopCountriesSimpleProps {
   sortBy: "traffic" | "connections";
   onSortChange: (mode: "traffic" | "connections") => void;
   onViewAll?: () => void;
+  isLoading?: boolean;
 }
 
 const countryNamesEn: Record<string, string> = {
@@ -47,6 +48,7 @@ export const TopCountriesSimple = React.memo(function TopCountriesSimple({
   sortBy,
   onSortChange,
   onViewAll,
+  isLoading,
 }: TopCountriesSimpleProps) {
   const t = useTranslations("topCountries");
   const locale = useLocale();
@@ -181,7 +183,35 @@ export const TopCountriesSimple = React.memo(function TopCountriesSimple({
               </div>
             </div>
           );
-        }) : (
+        }) : isLoading ? (
+          // Skeleton loading state - 6 items with 2 rows each to match actual content height
+          Array.from({ length: 6 }).map((_, i) => (
+            <div
+              key={i}
+              className="p-2.5 rounded-xl border border-border/50 bg-card/50"
+            >
+              {/* Row 1: Rank + Flag + Name + Total - mb-1.5 like real data */}
+              <div className="flex items-center gap-2 mb-1.5">
+                <div className="w-5 h-5 rounded-md bg-muted/60 animate-pulse shrink-0" />
+                <div className="w-5 h-[14px] rounded bg-muted/60 animate-pulse shrink-0" />
+                <div className="flex-1 h-4 bg-muted/60 rounded animate-pulse" />
+                <div className="w-12 h-4 bg-muted/60 rounded animate-pulse shrink-0" />
+              </div>
+              {/* Row 2: Progress bar + Stats placeholder - space-y-1.5 like real data */}
+              <div className="pl-7 space-y-1.5">
+                <div className="h-1.5 rounded-full bg-muted/60 animate-pulse" />
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-14 h-3 bg-muted/60 rounded animate-pulse" />
+                    <div className="w-14 h-3 bg-muted/60 rounded animate-pulse" />
+                    <div className="w-10 h-3 bg-muted/60 rounded animate-pulse" />
+                  </div>
+                  <div className="w-8 h-3 bg-muted/60 rounded animate-pulse" />
+                </div>
+              </div>
+            </div>
+          ))
+        ) : (
           <div className="h-full min-h-[220px] rounded-xl border border-dashed border-border/60 bg-card/30 px-4 py-5">
             <div className="space-y-2">
               {[0, 1, 2].map((item) => (

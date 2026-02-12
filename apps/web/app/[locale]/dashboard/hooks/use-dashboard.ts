@@ -62,6 +62,7 @@ export interface UseDashboardReturn {
   queryError: string | null;
   wsConnected: boolean;
   wsRealtimeActive: boolean;
+  isLoading: boolean;
 
   // Actions
   setActiveTab: (tab: TabId) => void;
@@ -366,6 +367,7 @@ export function useDashboard(): UseDashboardReturn {
     queryError,
     wsConnected,
     wsRealtimeActive,
+    isLoading: summaryQuery.isLoading || (backendsQuery.isLoading && !backends.length),
 
     // Actions
     setActiveTab,

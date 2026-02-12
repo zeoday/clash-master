@@ -2,12 +2,15 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef, useTransition } from "react";
 import { useTranslations } from "next-intl";
+import { useQueryClient } from "@tanstack/react-query";
 import { TopDomainsSimple } from "./top-domains-simple";
 import { TopProxiesSimple } from "./top-proxies-simple";
 import { TopCountriesSimple } from "./top-countries-simple";
 import { TrafficTrendChart } from "@/components/features/stats/charts/trend-chart";
 import { useStatsWebSocket } from "@/lib/websocket";
-import { api, type TimeRange } from "@/lib/api";
+import { useTrafficTrend } from "@/hooks/api/use-traffic-trend";
+import { type TimeRange } from "@/lib/api";
+import { getTrafficTrendQueryKey } from "@/lib/stats-query-keys";
 import type { TimePreset } from "@/lib/types/dashboard";
 import type {
   DomainStats,
@@ -31,23 +34,14 @@ interface OverviewTabProps {
   autoRefresh?: boolean;
   onNavigate?: (tab: string) => void;
   backendStatus?: "healthy" | "unhealthy" | "unknown";
+  isLoading?: boolean;
 }
 
 const THIRTY_MINUTES_MS = 30 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const REALTIME_END_TOLERANCE_MS = 2 * 60 * 1000;
-const TREND_CACHE_TTL_MS = 60 * 1000;
 const TREND_WS_MIN_PUSH_MS = 3_000;
-
-type TrendCacheEntry = {
-  data: TrafficTrendPoint[];
-  granularity: TrendGranularity;
-  expiresAt: number;
-};
-
-// Cache for historical trend data only.
-const trendDataCache = new Map<string, TrendCacheEntry>();
 
 function parseIsoDate(value: string): Date | null {
   const date = new Date(value);
@@ -108,20 +102,19 @@ export function OverviewTab({
   autoRefresh = true,
   onNavigate,
   backendStatus = "unknown",
+  isLoading,
 }: OverviewTabProps) {
   const dashboardT = useTranslations("dashboard");
+  const queryClient = useQueryClient();
   const [domainSort, setDomainSort] = useState<"traffic" | "connections">("traffic");
   const [proxySort, setProxySort] = useState<"traffic" | "connections">("traffic");
   const [countrySort, setCountrySort] = useState<"traffic" | "connections">("traffic");
 
   // Traffic trend state
-  const [trendData, setTrendData] = useState<TrafficTrendPoint[]>([]);
   const [trendGranularity, setTrendGranularity] = useState<TrendGranularity>("minute");
   const [trendTimeRange, setTrendTimeRange] = useState<TrendTimeRange>("24h");
-  const [trendLoading, setTrendLoading] = useState(false);
+  const [forceMinuteGranularity, setForceMinuteGranularity] = useState(false);
   const [, startTransition] = useTransition();
-  const initialLoadedRef = useRef(false);
-  const requestIdRef = useRef(0);
 
   const parsedRange = useMemo(() => {
     const end = parseIsoDate(timeRange.end) ?? new Date();
@@ -177,7 +170,13 @@ export function OverviewTab({
     }
 
     const durationMs = Math.max(60 * 1000, queryEnd.getTime() - queryStart.getTime());
-    const granularity: TrendGranularity = durationMs > ONE_DAY_MS ? "day" : "minute";
+    let granularity: TrendGranularity = durationMs > ONE_DAY_MS ? "day" : "minute";
+    
+    // Override granularity if forced (when sparse data is detected)
+    if (forceMinuteGranularity) {
+        granularity = "minute";
+    }
+
     const bucketMinutes = granularity === "day" ? 24 * 60 : getMinuteBucket(durationMs);
     const minutes = Math.max(1, Math.ceil(durationMs / 60000));
     const realtime = queryEnd.getTime() >= Date.now() - REALTIME_END_TOLERANCE_MS;
@@ -190,9 +189,10 @@ export function OverviewTab({
       bucketMinutes,
       granularity,
       realtime,
-      cacheKey: `${queryStart.toISOString()}-${queryEnd.toISOString()}-${bucketMinutes}`,
     };
-  }, [parsedRange.end, parsedRange.start, canUseTrendSelector, trendTimeRange]);
+  }, [parsedRange.end, parsedRange.start, canUseTrendSelector, trendTimeRange, forceMinuteGranularity]);
+
+
   const wsTrendEnabled = autoRefresh && !!activeBackendId && canUseTrendSelector && trendQuery.realtime;
   const { status: wsTrendStatus } = useStatsWebSocket({
     backendId: activeBackendId,
@@ -205,133 +205,68 @@ export function OverviewTab({
     enabled: wsTrendEnabled,
     onMessage: useCallback((stats: StatsSummary) => {
       if (!stats.trendStats) return;
-      startTransition(() => {
-        setTrendData(stats.trendStats ?? []);
-        setTrendGranularity(trendQuery.granularity);
-      });
-      setTrendLoading(false);
-    }, [trendQuery.granularity]),
+      
+      // Update Query Cache directly
+      const queryKey = getTrafficTrendQueryKey(
+        activeBackendId, 
+        trendQuery.minutes, 
+        trendQuery.bucketMinutes, 
+        { start: trendQuery.start, end: trendQuery.end }
+      );
+      
+      queryClient.setQueryData(queryKey, stats.trendStats);
+    }, [activeBackendId, trendQuery, queryClient]),
   });
   const wsTrendConnected = wsTrendStatus === "connected";
 
-  // Load traffic trend data with caching
-  const loadTrendData = useCallback(async (showLoading = false) => {
-    if (!activeBackendId) return;
-
-    const baseCacheKey = `${activeBackendId}-${trendQuery.cacheKey}`;
-    const fullCacheKey = `${baseCacheKey}-${trendQuery.granularity}-${trendQuery.bucketMinutes}`;
-    const cached = trendDataCache.get(fullCacheKey);
-    if (!trendQuery.realtime && cached && cached.expiresAt > Date.now()) {
-      startTransition(() => {
-        setTrendData(cached.data);
-        setTrendGranularity(cached.granularity);
-      });
-      return;
-    }
-
-    if (showLoading) {
-      setTrendLoading(true);
-    }
-
-    const requestId = ++requestIdRef.current;
-
-    try {
-      let resolvedGranularity: TrendGranularity = trendQuery.granularity;
-      let resolvedBucketMinutes = trendQuery.bucketMinutes;
-
-      let data = await api.getTrafficTrendAggregated(
-        activeBackendId,
-        trendQuery.minutes,
-        resolvedBucketMinutes,
-        { start: trendQuery.start, end: trendQuery.end },
-      );
-
-      if (requestId !== requestIdRef.current) {
-        return;
-      }
-
-      // If user selected a long range but actual recorded data only spans
-      // a short window, switch to minute-level rendering for better visibility.
-      if (trendQuery.granularity === "day" && data.length > 0) {
-        const spanMs = getTrendDataSpanMs(data);
-        const shouldFallbackToMinute = data.length <= 2 && spanMs <= ONE_DAY_MS;
-        if (shouldFallbackToMinute) {
-          resolvedGranularity = "minute";
-          resolvedBucketMinutes = getMinuteBucket(Math.max(60 * 1000, spanMs || ONE_HOUR_MS));
-          const minuteCacheKey = `${baseCacheKey}-${resolvedGranularity}-${resolvedBucketMinutes}`;
-          const minuteCached = trendDataCache.get(minuteCacheKey);
-          if (!trendQuery.realtime && minuteCached && minuteCached.expiresAt > Date.now()) {
-            data = minuteCached.data;
-          } else {
-            data = await api.getTrafficTrendAggregated(
-              activeBackendId,
-              trendQuery.minutes,
-              resolvedBucketMinutes,
-              { start: trendQuery.start, end: trendQuery.end },
-            );
-          }
-          if (requestId !== requestIdRef.current) {
-            return;
-          }
-        }
-      }
-
-      if (!trendQuery.realtime) {
-        const finalCacheKey = `${baseCacheKey}-${resolvedGranularity}-${resolvedBucketMinutes}`;
-        trendDataCache.set(finalCacheKey, {
-          data,
-          granularity: resolvedGranularity,
-          expiresAt: Date.now() + TREND_CACHE_TTL_MS,
-        });
-      }
-
-      startTransition(() => {
-        setTrendData(data);
-        setTrendGranularity(resolvedGranularity);
-      });
-    } catch (error) {
-      console.error("Failed to load traffic trend:", error);
-    } finally {
-      setTrendLoading(false);
-    }
-  }, [
+  // Use the new hook for data fetching
+  const { data: trendData, isLoading: trendLoading, isFetching: trendFetching } = useTrafficTrend({
     activeBackendId,
-    trendQuery.cacheKey,
-    trendQuery.realtime,
-    trendQuery.minutes,
-    trendQuery.bucketMinutes,
-    trendQuery.start,
-    trendQuery.end,
-  ]);
+    minutes: trendQuery.minutes,
+    bucketMinutes: trendQuery.bucketMinutes,
+    range: { start: trendQuery.start, end: trendQuery.end },
+    enabled: !!activeBackendId,
+    refetchInterval: wsTrendEnabled && wsTrendStatus === "connected" ? 90000 : false,
+  });
 
-  // Initial load marker reset on backend switch.
+  // Sync trend granularity state
   useEffect(() => {
-    initialLoadedRef.current = false;
-  }, [activeBackendId]);
+    setTrendGranularity(trendQuery.granularity);
+  }, [trendQuery.granularity]);
 
-  // Reload when backend/global range/trend selector changes.
+  // Sparse data detection logic
   useEffect(() => {
-    if (!activeBackendId) return;
-    const showLoading = !initialLoadedRef.current || !trendQuery.realtime;
-    loadTrendData(showLoading);
-    initialLoadedRef.current = true;
-  }, [activeBackendId, loadTrendData, trendQuery.realtime]);
-
-  // Periodic HTTP reconciliation while WS drives real-time updates.
+    if (!trendData || trendLoading) return;
+    
+    // Only check if we are in "day" granularity and not already forced
+    if (trendQuery.granularity === "day" && !forceMinuteGranularity && trendData.length > 0) {
+      const spanMs = getTrendDataSpanMs(trendData);
+      const shouldFallbackToMinute = trendData.length <= 2 && spanMs <= ONE_DAY_MS;
+      
+      if (shouldFallbackToMinute) {
+        setForceMinuteGranularity(true);
+      }
+    } else if (trendQuery.granularity === "minute" && forceMinuteGranularity) {
+      // Reset force if we moved naturally to minute or conditions changed? 
+      // For now, reset if the natural granularity becomes minute
+      const durationMs = Math.max(60 * 1000, new Date(trendQuery.end).getTime() - new Date(trendQuery.start).getTime());
+       if (durationMs <= ONE_DAY_MS) {
+           setForceMinuteGranularity(false);
+       }
+    }
+  }, [trendData, trendQuery.granularity, trendLoading, forceMinuteGranularity, trendQuery.start, trendQuery.end]);
+  
+  // Reset force state when backend or time range changes drastically
   useEffect(() => {
-    if (!wsTrendEnabled || !wsTrendConnected) return;
-    const interval = setInterval(() => {
-      loadTrendData(false);
-    }, 90000);
-    return () => clearInterval(interval);
-  }, [wsTrendEnabled, wsTrendConnected, loadTrendData]);
+     setForceMinuteGranularity(false);
+  }, [activeBackendId, timeRange, trendTimeRange]);
 
   // Handle time range change with transition
   const handleTimeRangeChange = (range: TrendTimeRange) => {
     if (range === trendTimeRange) return;
-    setTrendLoading(true);
     startTransition(() => {
       setTrendTimeRange(range);
+      setForceMinuteGranularity(false); 
     });
   };
 
@@ -339,12 +274,12 @@ export function OverviewTab({
     <div className="space-y-6">
       {/* Traffic Trend Chart - Full width */}
       <TrafficTrendChart 
-        data={trendData}
+        data={trendData || []}
         granularity={trendGranularity}
         timeRange={canUseTrendSelector ? trendTimeRange : undefined}
         timeRangeOptions={trendTimeOptions}
         onTimeRangeChange={canUseTrendSelector ? handleTimeRangeChange : undefined}
-        isLoading={trendLoading}
+        isLoading={isLoading || trendLoading || (trendFetching && (!trendData || trendData.length === 0))}
         emptyHint={backendStatus === "unhealthy" ? dashboardT("backendUnavailableHint") : undefined}
       />
       
@@ -355,6 +290,7 @@ export function OverviewTab({
           sortBy={domainSort}
           onSortChange={setDomainSort}
           onViewAll={() => onNavigate?.("domains")}
+          isLoading={isLoading}
         />
         
         {/* Top Proxies */}
@@ -363,6 +299,7 @@ export function OverviewTab({
           sortBy={proxySort}
           onSortChange={setProxySort}
           onViewAll={() => onNavigate?.("proxies")}
+          isLoading={isLoading}
         />
         
         {/* Top Countries */}
@@ -371,8 +308,10 @@ export function OverviewTab({
           sortBy={countrySort}
           onSortChange={setCountrySort}
           onViewAll={() => onNavigate?.("countries")}
+          isLoading={isLoading}
         />
       </div>
     </div>
   );
 }
+

@@ -49,6 +49,8 @@ export const viewport: Viewport = {
   userScalable: false,
 };
 
+
+
 export default async function RootLayout({
   children,
   params,
@@ -57,7 +59,7 @@ export default async function RootLayout({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
-  if (!routing.locales.includes(locale as any)) notFound();
+  if (!routing.locales.includes(locale as (typeof routing.locales)[number])) notFound();
 
   const messages = await getMessages();
 

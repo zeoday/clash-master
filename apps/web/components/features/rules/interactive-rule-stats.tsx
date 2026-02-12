@@ -3,7 +3,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef, startTransition } from "react";
 import { Server, ChevronLeft, ChevronRight, BarChart3, Link2, Rows3, ArrowUpDown, ArrowDown, ArrowUp, Globe, Waypoints, ChevronDown, ChevronUp } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from "recharts";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Cell as BarCell, LabelList } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,17 +21,18 @@ import { formatBytes, formatNumber } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import { api, type GatewayRulesResponse, type TimeRange } from "@/lib/api";
 import { useStableTimeRange } from "@/lib/hooks/use-stable-time-range";
-import { keepPreviousByIdentity } from "@/lib/query-placeholder";
 import { useStatsWebSocket } from "@/lib/websocket";
 import {
   getRuleDomainsQueryKey,
   getRuleIPsQueryKey,
-  getIPDomainDetailsQueryKey,
-  getIPProxyStatsQueryKey,
-  getDomainIPDetailsQueryKey,
-  getDomainProxyStatsQueryKey,
-  getRulesQueryKey,
 } from "@/lib/stats-query-keys";
+import { useRules, useGatewayRules, useRuleDomains, useRuleIPs } from "@/hooks/api/use-rules";
+import {
+  useRuleDomainProxyStats,
+  useRuleDomainIPDetails,
+  useRuleIPProxyStats,
+  useRuleIPDomainDetails,
+} from "@/hooks/api/use-rule-details";
 import { CountryFlag } from "@/components/features/countries/country-flag";
 import { Favicon } from "@/components/common/favicon";
 import { DomainPreview } from "@/components/features/domains/domain-preview";
@@ -62,7 +63,6 @@ const CHART_COLORS = [
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 type PageSize = typeof PAGE_SIZE_OPTIONS[number];
-const DETAIL_QUERY_STALE_MS = 30_000;
 const RULE_DETAIL_WS_MERGE_MS = 5_000;
 const RULE_DETAIL_WS_MIN_PUSH_MS = 5_000;
 const EMPTY_DOMAINS: DomainStats[] = [];
@@ -147,17 +147,18 @@ export function InteractiveRuleStats({
   const domainsT = useTranslations("domains");
   const ipsT = useTranslations("ips");
   const backendT = useTranslations("dashboard");
+  const queryClient = useQueryClient();
   const stableTimeRange = useStableTimeRange(timeRange, { roundToMinute: true });
   const detailTimeRange = stableTimeRange;
 
-  const ruleListQuery = useQuery({
-    queryKey: getRulesQueryKey(activeBackendId, 50, stableTimeRange),
-    queryFn: () => api.getRules(activeBackendId, 50, stableTimeRange),
+  const { data: listData, isLoading: listQueryLoading } = useRules({
+    activeBackendId,
+    limit: 50,
+    range: stableTimeRange,
     enabled: !data && !!activeBackendId,
-    placeholderData: keepPreviousData,
   });
-  const rulesData = data ?? ruleListQuery.data ?? [];
-  const listLoading = !data && ruleListQuery.isLoading && !ruleListQuery.data;
+  const rulesData = data ?? listData ?? [];
+  const listLoading = !data && listQueryLoading && !listData;
   
   const [selectedRule, setSelectedRule] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("domains");
@@ -169,13 +170,12 @@ export function InteractiveRuleStats({
   const [ipPage, setIpPage] = useState(1);
   const [ipSearch, setIpSearch] = useState("");
   const [showDomainBarLabels, setShowDomainBarLabels] = useState(true);
-  const [gatewayRules, setGatewayRules] = useState<GatewayRulesResponse | null>(null);
-  const [wsRuleDomains, setWsRuleDomains] = useState<DomainStats[] | null>(null);
-  const [wsRuleIPs, setWsRuleIPs] = useState<IPStats[] | null>(null);
-  const pendingRuleDomainsRef = useRef<DomainStats[] | null>(null);
-  const pendingRuleIPsRef = useRef<IPStats[] | null>(null);
-  const detailFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastDetailFlushAtRef = useRef(0);
+
+  // Fetch Gateway rules to find zero-traffic rules.
+  const { data: gatewayRules = null } = useGatewayRules({
+    activeBackendId,
+    enabled: !!activeBackendId,
+  });
 
   // Sort states
   const [domainSortKey, setDomainSortKey] = useState<DomainSortKey>("totalDownload");
@@ -197,19 +197,6 @@ export function InteractiveRuleStats({
 
   // Fetch Gateway rules to find zero-traffic rules.
   // Ruleset metadata changes infrequently, so load on mount/backend switch only.
-  useEffect(() => {
-    let cancelled = false;
-    async function fetchGatewayRules() {
-      try {
-        const result = await api.getGatewayRules(activeBackendId);
-        if (!cancelled) setGatewayRules(result);
-      } catch {
-        // Silent - Gateway API may not be available
-      }
-    }
-    fetchGatewayRules();
-    return () => { cancelled = true; };
-  }, [activeBackendId]);
 
   const chartData = useMemo<RuleChartItem[]>(() => {
     if (!rulesData) return [];
@@ -303,50 +290,6 @@ export function InteractiveRuleStats({
     setExpandedIP(newExpanded);
   };
 
-  const flushPendingRuleDetails = useCallback(() => {
-    detailFlushTimerRef.current = null;
-    const nextDomains = pendingRuleDomainsRef.current;
-    const nextIPs = pendingRuleIPsRef.current;
-    pendingRuleDomainsRef.current = null;
-    pendingRuleIPsRef.current = null;
-    if (nextDomains || nextIPs) {
-      startTransition(() => {
-        if (nextDomains) {
-          setWsRuleDomains(nextDomains);
-        }
-        if (nextIPs) {
-          setWsRuleIPs(nextIPs);
-        }
-      });
-    }
-    lastDetailFlushAtRef.current = Date.now();
-  }, []);
-
-  const enqueueRuleDetailUpdate = useCallback((
-    domains: DomainStats[] | undefined,
-    ips: IPStats[] | undefined,
-  ) => {
-    if (domains) {
-      pendingRuleDomainsRef.current = domains;
-    }
-    if (ips) {
-      pendingRuleIPsRef.current = ips;
-    }
-
-    const now = Date.now();
-    const elapsed = now - lastDetailFlushAtRef.current;
-    if (elapsed >= RULE_DETAIL_WS_MERGE_MS) {
-      flushPendingRuleDetails();
-      return;
-    }
-    if (detailFlushTimerRef.current) {
-      return;
-    }
-    detailFlushTimerRef.current = setTimeout(() => {
-      flushPendingRuleDetails();
-    }, RULE_DETAIL_WS_MERGE_MS - elapsed);
-  }, [flushPendingRuleDetails]);
-
   const wsDetailEnabled = autoRefresh && !!activeBackendId && !!selectedRule;
   const { status: wsDetailStatus } = useStatsWebSocket({
     backendId: activeBackendId,
@@ -360,178 +303,70 @@ export function InteractiveRuleStats({
     onMessage: useCallback((stats: StatsSummary) => {
       if (!selectedRule) return;
       if (stats.ruleDetailName !== selectedRule) return;
-      if (stats.ruleDomains || stats.ruleIPs) {
-        enqueueRuleDetailUpdate(stats.ruleDomains, stats.ruleIPs);
+      
+      if (stats.ruleDomains) {
+        queryClient.setQueryData(
+          getRuleDomainsQueryKey(selectedRule, activeBackendId, detailTimeRange),
+          stats.ruleDomains
+        );
       }
-    }, [enqueueRuleDetailUpdate, selectedRule]),
-  });
-
-  useEffect(() => {
-    setWsRuleDomains(null);
-    setWsRuleIPs(null);
-    pendingRuleDomainsRef.current = null;
-    pendingRuleIPsRef.current = null;
-    lastDetailFlushAtRef.current = 0;
-    if (detailFlushTimerRef.current) {
-      clearTimeout(detailFlushTimerRef.current);
-      detailFlushTimerRef.current = null;
-    }
-  }, [selectedRule, activeBackendId]);
-
-  useEffect(() => {
-    if (wsDetailEnabled) return;
-    pendingRuleDomainsRef.current = null;
-    pendingRuleIPsRef.current = null;
-    lastDetailFlushAtRef.current = 0;
-    if (detailFlushTimerRef.current) {
-      clearTimeout(detailFlushTimerRef.current);
-      detailFlushTimerRef.current = null;
-    }
-  }, [wsDetailEnabled]);
-
-  useEffect(() => {
-    return () => {
-      if (detailFlushTimerRef.current) {
-        clearTimeout(detailFlushTimerRef.current);
+      if (stats.ruleIPs) {
+        queryClient.setQueryData(
+          getRuleIPsQueryKey(selectedRule, activeBackendId, detailTimeRange),
+          stats.ruleIPs
+        );
       }
-    };
-  }, []);
-
-  const hasWsRuleDetails =
-    wsDetailEnabled &&
-    wsDetailStatus === "connected" &&
-    wsRuleDomains !== null &&
-    wsRuleIPs !== null;
-
-  const expandedDomainProxyQuery = useQuery({
-    queryKey: getDomainProxyStatsQueryKey(expandedDomain, activeBackendId, detailTimeRange, {
-      rule: selectedRule ?? undefined,
-    }),
-    queryFn: () =>
-      api.getRuleDomainProxyStats(
-        selectedRule!,
-        expandedDomain!,
-        activeBackendId,
-        detailTimeRange,
-      ),
-    enabled: !!activeBackendId && !!selectedRule && !!expandedDomain,
-    staleTime: DETAIL_QUERY_STALE_MS,
-    placeholderData: (previousData, previousQuery) =>
-      keepPreviousByIdentity(previousData, previousQuery, {
-        domain: expandedDomain ?? "",
-        backendId: activeBackendId ?? null,
-        rule: selectedRule ?? "",
-      }),
+    }, [selectedRule, activeBackendId, detailTimeRange, queryClient]),
   });
 
-  const expandedDomainIPDetailsQuery = useQuery({
-    queryKey: getDomainIPDetailsQueryKey(expandedDomain, activeBackendId, detailTimeRange, {
-      rule: selectedRule ?? undefined,
-    }),
-    queryFn: () =>
-      api.getRuleDomainIPDetails(
-        selectedRule!,
-        expandedDomain!,
-        activeBackendId,
-        detailTimeRange,
-      ),
-    enabled: !!activeBackendId && !!selectedRule && !!expandedDomain,
-    staleTime: DETAIL_QUERY_STALE_MS,
-    placeholderData: (previousData, previousQuery) =>
-      keepPreviousByIdentity(previousData, previousQuery, {
-        domain: expandedDomain ?? "",
-        backendId: activeBackendId ?? null,
-        rule: selectedRule ?? "",
-      }),
+  const expandedDomainProxyQuery = useRuleDomainProxyStats({
+    rule: selectedRule ?? undefined,
+    domain: expandedDomain ?? undefined,
+    activeBackendId,
+    range: detailTimeRange,
+    enabled: !!expandedDomain,
   });
 
-  const expandedIPProxyQuery = useQuery({
-    queryKey: getIPProxyStatsQueryKey(expandedIP, activeBackendId, detailTimeRange, {
-      rule: selectedRule ?? undefined,
-    }),
-    queryFn: () =>
-      api.getRuleIPProxyStats(
-        selectedRule!,
-        expandedIP!,
-        activeBackendId,
-        detailTimeRange,
-      ),
-    enabled: !!activeBackendId && !!selectedRule && !!expandedIP,
-    staleTime: DETAIL_QUERY_STALE_MS,
-    placeholderData: (previousData, previousQuery) =>
-      keepPreviousByIdentity(previousData, previousQuery, {
-        ip: expandedIP ?? "",
-        backendId: activeBackendId ?? null,
-        rule: selectedRule ?? "",
-      }),
+  const expandedDomainIPDetailsQuery = useRuleDomainIPDetails({
+    rule: selectedRule ?? undefined,
+    domain: expandedDomain ?? undefined,
+    activeBackendId,
+    range: detailTimeRange,
+    enabled: !!expandedDomain,
   });
 
-  const expandedIPDomainDetailsQuery = useQuery({
-    queryKey: getIPDomainDetailsQueryKey(expandedIP, activeBackendId, detailTimeRange, {
-      rule: selectedRule ?? undefined,
-    }),
-    queryFn: () =>
-      api.getRuleIPDomainDetails(
-        selectedRule!,
-        expandedIP!,
-        activeBackendId,
-        detailTimeRange,
-      ),
-    enabled: !!activeBackendId && !!selectedRule && !!expandedIP,
-    staleTime: DETAIL_QUERY_STALE_MS,
-    placeholderData: (previousData, previousQuery) =>
-      keepPreviousByIdentity(previousData, previousQuery, {
-        ip: expandedIP ?? "",
-        backendId: activeBackendId ?? null,
-        rule: selectedRule ?? "",
-      }),
+  const expandedIPProxyQuery = useRuleIPProxyStats({
+    rule: selectedRule ?? undefined,
+    ip: expandedIP ?? undefined,
+    activeBackendId,
+    range: detailTimeRange,
+    enabled: !!expandedIP,
   });
 
-  const ruleDomainsQuery = useQuery({
-    queryKey: getRuleDomainsQueryKey(selectedRule, activeBackendId, detailTimeRange),
-    queryFn: () =>
-      api.getRuleDomains(
-        selectedRule!,
-        activeBackendId,
-        detailTimeRange,
-      ),
-    enabled: !!activeBackendId && !!selectedRule && !hasWsRuleDetails,
-    placeholderData: (previousData, previousQuery) =>
-      keepPreviousByIdentity(previousData, previousQuery, {
-        rule: selectedRule ?? "",
-        backendId: activeBackendId ?? null,
-      }),
+  const expandedIPDomainDetailsQuery = useRuleIPDomainDetails({
+    rule: selectedRule ?? undefined,
+    ip: expandedIP ?? undefined,
+    activeBackendId,
+    range: detailTimeRange,
+    enabled: !!expandedIP,
   });
 
-  const ruleIPsQuery = useQuery({
-    queryKey: getRuleIPsQueryKey(selectedRule, activeBackendId, detailTimeRange),
-    queryFn: () =>
-      api.getRuleIPs(
-        selectedRule!,
-        activeBackendId,
-        detailTimeRange,
-      ),
-    enabled: !!activeBackendId && !!selectedRule && !hasWsRuleDetails,
-    placeholderData: (previousData, previousQuery) =>
-      keepPreviousByIdentity(previousData, previousQuery, {
-        rule: selectedRule ?? "",
-        backendId: activeBackendId ?? null,
-      }),
+  const { data: ruleDomains = [], isLoading: domainsLoading } = useRuleDomains({
+    rule: selectedRule,
+    activeBackendId,
+    range: detailTimeRange,
+    enabled: !!selectedRule,
   });
 
-  const ruleDomains: DomainStats[] = hasWsRuleDetails
-    ? wsRuleDomains ?? []
-    : ruleDomainsQuery.data ?? wsRuleDomains ?? [];
-  const ruleIPs: IPStats[] = hasWsRuleDetails
-    ? wsRuleIPs ?? []
-    : ruleIPsQuery.data ?? wsRuleIPs ?? [];
-  const hasDetailSnapshot =
-    hasWsRuleDetails ||
-    wsRuleDomains !== null ||
-    wsRuleIPs !== null ||
-    ruleDomainsQuery.data !== undefined ||
-    ruleIPsQuery.data !== undefined;
-  const loading = !!selectedRule && !hasDetailSnapshot;
+  const { data: ruleIPs = [], isLoading: ipsLoading } = useRuleIPs({
+    rule: selectedRule,
+    activeBackendId,
+    range: detailTimeRange,
+    enabled: !!selectedRule,
+  });
+
+  const loading = !!selectedRule && (domainsLoading || ipsLoading) && ruleDomains.length === 0 && ruleIPs.length === 0;
+
 
   // Sort icon component
   const DomainSortIcon = ({ column }: { column: DomainSortKey }) => {

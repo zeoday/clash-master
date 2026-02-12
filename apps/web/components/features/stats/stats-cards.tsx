@@ -4,13 +4,14 @@ import { useRef, useEffect } from "react";
 import { Download, Upload, Globe, Activity, Server, Route } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { motion, useSpring, useTransform, useMotionValue } from "framer-motion";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, cn } from "@/lib/utils";
 import type { StatsSummary } from "@neko-master/shared";
 
 interface StatsCardsProps {
   data: StatsSummary | null;
   error?: string | null;
   backendStatus?: "healthy" | "unhealthy" | "unknown";
+  isLoading?: boolean;
 }
 
 // ---------- Animated number display ----------
@@ -96,7 +97,7 @@ function AnimatedStatCard({
 
 // ---------- Main ----------
 
-export function StatsCards({ data, backendStatus }: StatsCardsProps) {
+export function StatsCards({ data, backendStatus, isLoading }: StatsCardsProps) {
   const t = useTranslations("stats");
   const summaryIsZero =
     !data ||
@@ -112,14 +113,16 @@ export function StatsCards({ data, backendStatus }: StatsCardsProps) {
     icon: Icon,
     label,
     color,
+    shimmer = false,
   }: {
     icon: React.ElementType;
     label: string;
     color: string;
+    shimmer?: boolean;
   }) => (
     <div className="rounded-xl p-3.5 border bg-card shadow-xs flex flex-col">
       <div
-        className="w-8 h-8 rounded-md flex items-center justify-center mb-2.5 animate-pulse"
+        className={cn("w-8 h-8 rounded-md flex items-center justify-center mb-2.5", shimmer && "animate-pulse")}
         style={{ backgroundColor: `${color}15` }}>
         <Icon className="w-4 h-4" style={{ color }} />
       </div>
@@ -127,15 +130,36 @@ export function StatsCards({ data, backendStatus }: StatsCardsProps) {
         <p className="text-muted-foreground text-[11px] uppercase tracking-[0.14em] font-medium truncate">
           {label}
         </p>
-        <p className="text-lg leading-none font-semibold mt-2.5 tabular-nums text-muted-foreground">
-          --
-        </p>
-        <p className="text-[11px] text-muted-foreground mt-1.5 truncate">
-          {t("unavailable")}
-        </p>
+        {shimmer ? (
+          <div className="h-5 w-24 bg-muted/50 rounded mt-2.5 mb-1 animate-pulse" />
+        ) : (
+          <p className="text-lg leading-none font-semibold mt-2.5 tabular-nums text-muted-foreground">
+            --
+          </p>
+        )}
+        {shimmer ? (
+           <div className="h-3 w-12 bg-muted/30 rounded mt-1.5 animate-pulse" />
+        ) : (
+          <p className="text-[11px] text-muted-foreground mt-1.5 truncate">
+            {t("unavailable")}
+          </p>
+        )}
       </div>
     </div>
   );
+
+  if (isLoading) {
+    return (
+      <div className="grid gap-2.5 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+          <PlaceholderStatCard icon={Download} label={t("totalDownload")} color="#3B82F6" shimmer />
+          <PlaceholderStatCard icon={Upload} label={t("totalUpload")} color="#8B5CF6" shimmer />
+          <PlaceholderStatCard icon={Server} label={t("total")} color="#EC4899" shimmer />
+          <PlaceholderStatCard icon={Activity} label={t("totalConnections")} color="#10B981" shimmer />
+          <PlaceholderStatCard icon={Globe} label={t("domains")} color="#06B6D4" shimmer />
+          <PlaceholderStatCard icon={Route} label={t("rules")} color="#F59E0B" shimmer />
+      </div>
+    );
+  }
 
   return (
     <div className="grid gap-2.5 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">

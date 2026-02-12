@@ -42,6 +42,7 @@ interface ContentProps {
   activeBackendId?: number;
   backendStatus: BackendStatus;
   onNavigate?: (tab: string) => void;
+  isLoading?: boolean;
 }
 
 // Overview Content Component
@@ -55,6 +56,7 @@ const OverviewContent = memo(function OverviewContent({
   activeBackendId,
   onNavigate,
   backendStatus,
+  isLoading,
 }: {
   data: StatsSummary | null;
   countryData: CountryStats[];
@@ -65,10 +67,16 @@ const OverviewContent = memo(function OverviewContent({
   activeBackendId?: number;
   onNavigate?: (tab: string) => void;
   backendStatus: BackendStatus;
+  isLoading?: boolean;
 }) {
   return (
     <div className="space-y-6">
-      <StatsCards data={data} error={error} backendStatus={backendStatus} />
+      <StatsCards 
+        data={data} 
+        error={error} 
+        backendStatus={backendStatus} 
+        isLoading={isLoading} 
+      />
       <OverviewTab
         domains={data?.topDomains || []}
         proxies={data?.proxyStats || []}
@@ -79,6 +87,7 @@ const OverviewContent = memo(function OverviewContent({
         activeBackendId={activeBackendId}
         onNavigate={onNavigate}
         backendStatus={backendStatus}
+        isLoading={isLoading}
       />
     </div>
   );

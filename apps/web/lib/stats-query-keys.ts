@@ -74,6 +74,24 @@ export function getRulesQueryKey(backendId?: number, limit = 50, range?: TimeRan
   ] as const;
 }
 
+export function getTrafficTrendQueryKey(
+  backendId?: number,
+  minutes = 30,
+  bucketMinutes = 1,
+  range?: TimeRange,
+) {
+  return [
+    "stats",
+    "traffic-trend",
+    {
+      backendId: backendId ?? null,
+      minutes,
+      bucketMinutes,
+      ...normalizeRange(range),
+    },
+  ] as const;
+}
+
 type DetailScope = {
   sourceIP?: string;
   sourceChain?: string;

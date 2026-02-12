@@ -38,25 +38,17 @@ function resolveApiBase(): string {
   return "/api";
 }
 
+import { ApiError } from "./api-error";
+
 const API_BASE = resolveApiBase();
 const DETAIL_FETCH_LIMIT = 5000;
 const inflightGetRequests = new Map<string, Promise<unknown>>();
 
-class ApiError extends Error {
-  status: number;
-  url: string;
-
-  constructor(status: number, url: string) {
-    super(`API error: ${status}`);
-    this.name = "ApiError";
-    this.status = status;
-    this.url = url;
-  }
-}
-
 function isApiStatus(error: unknown, status: number): boolean {
   return error instanceof ApiError && error.status === status;
 }
+
+
 
 async function fetchJson<T>(
   url: string,
@@ -95,7 +87,7 @@ async function fetchJson<T>(
           window.dispatchEvent(new CustomEvent("api:unauthorized"));
         }
       }
-      throw new ApiError(res.status, url);
+      throw new ApiError(`API Error ${res.status}: ${url}`, res.status, { url });
     }
     return await res.json() as T;
   })();

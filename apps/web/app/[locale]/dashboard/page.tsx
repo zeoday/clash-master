@@ -30,6 +30,7 @@ export default function DashboardPage() {
     backendStatus,
     backendStatusHint,
     queryError,
+    isLoading,
 
     // Actions
     setActiveTab,
@@ -98,6 +99,7 @@ export default function DashboardPage() {
             error={queryError}
             timeRange={timeRange}
             timePreset={timePreset}
+            isLoading={isLoading}
             autoRefresh={autoRefresh}
             activeBackendId={activeBackendId}
             backendStatus={backendStatus}

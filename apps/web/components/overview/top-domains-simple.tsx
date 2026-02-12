@@ -13,6 +13,7 @@ interface TopDomainsSimpleProps {
   sortBy: "traffic" | "connections";
   onSortChange: (mode: "traffic" | "connections") => void;
   onViewAll?: () => void;
+  isLoading?: boolean;
 }
 
 function getInitials(domain: string): string {
@@ -24,6 +25,7 @@ export const TopDomainsSimple = React.memo(function TopDomainsSimple({
   sortBy,
   onSortChange,
   onViewAll,
+  isLoading,
 }: TopDomainsSimpleProps) {
   const t = useTranslations("topDomains");
   const { settings } = useSettings();
@@ -164,7 +166,29 @@ export const TopDomainsSimple = React.memo(function TopDomainsSimple({
               </div>
             </div>
           );
-        }) : (
+        }) : isLoading ? (
+          // Skeleton loading state - 6 items with 2 rows each to match actual content height
+          Array.from({ length: 6 }).map((_, i) => (
+            <div
+              key={i}
+              className="p-2.5 rounded-xl border border-border/50 bg-card/50"
+            >
+              {/* Row 1: Rank + Icon + Name + Total */}
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 rounded-md bg-muted/60 animate-pulse shrink-0" />
+                <div className="w-5 h-5 rounded bg-muted/60 animate-pulse shrink-0" />
+                <div className="flex-1 h-4 bg-muted/60 rounded animate-pulse" />
+                <div className="w-12 h-4 bg-muted/60 rounded animate-pulse shrink-0" />
+              </div>
+              {/* Row 2: Stats placeholder to match actual height - use mt-1 like real data */}
+              <div className="pl-7 mt-1 flex items-center gap-2">
+                <div className="w-16 h-3 bg-muted/60 rounded animate-pulse" />
+                <div className="w-16 h-3 bg-muted/60 rounded animate-pulse" />
+                <div className="w-12 h-3 bg-muted/60 rounded animate-pulse" />
+              </div>
+            </div>
+          ))
+        ) : (
           <div className="h-full min-h-[220px] rounded-xl border border-dashed border-border/60 bg-card/30 px-4 py-5">
             <div className="space-y-2">
               {[0, 1, 2].map((item) => (

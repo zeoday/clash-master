@@ -14,6 +14,7 @@ export interface GeoLocation {
 export class GeoIPService {
   private db: StatsDatabase;
   private pendingQueries: Map<string, Promise<GeoLocation | null>> = new Map();
+  private failedIPs: Map<string, number> = new Map(); // IP -> failure timestamp
   private lastRequestTime: number = 0;
   private minRequestInterval: number = 100; // Minimum 100ms between requests
   private queue: {
@@ -22,6 +23,11 @@ export class GeoIPService {
   }[] = [];
   private isProcessing: boolean = false;
   private processorTimer: NodeJS.Timeout | null = null;
+
+  // Failed IPs won't be retried for 30 minutes
+  private static FAIL_COOLDOWN_MS = 30 * 60 * 1000;
+  // Maximum queue size to prevent unbounded memory growth
+  private static MAX_QUEUE_SIZE = 100;
 
   constructor(db: StatsDatabase) {
     this.db = db;
@@ -41,6 +47,12 @@ export class GeoIPService {
         continent: "LOCAL",
         continent_name: "Local Network",
       };
+    }
+
+    // Skip recently failed IPs (30 min cooldown)
+    const failedAt = this.failedIPs.get(ip);
+    if (failedAt && Date.now() - failedAt < GeoIPService.FAIL_COOLDOWN_MS) {
+      return null;
     }
 
     // Check cache first
@@ -78,6 +90,10 @@ export class GeoIPService {
 
   // Queue-based query to respect rate limits
   private async queryWithQueue(ip: string): Promise<GeoLocation | null> {
+    // Drop requests when queue is overloaded to prevent memory buildup
+    if (this.queue.length >= GeoIPService.MAX_QUEUE_SIZE) {
+      return null;
+    }
     return new Promise((resolve) => {
       this.queue.push({ ip, resolve });
       this.scheduleProcessing();
@@ -124,7 +140,7 @@ export class GeoIPService {
       console.log(`[GeoIP] Querying API for: ${ip}`);
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
+      const timeout = setTimeout(() => controller.abort(), 8000);
 
       const response = await fetch(
         `https://api.ipinfo.es/ipinfo?ip=${ip}&meituan=false`,
@@ -140,6 +156,7 @@ export class GeoIPService {
 
       if (!response.ok) {
         console.error(`[GeoIP] API error for ${ip}: ${response.status}`);
+        this.failedIPs.set(ip, Date.now());
         return null;
       }
 
@@ -172,6 +189,7 @@ export class GeoIPService {
       return geo;
     } catch (err) {
       console.error(`[GeoIP] Failed to query ${ip}:`, err);
+      this.failedIPs.set(ip, Date.now());
       return null;
     }
   }

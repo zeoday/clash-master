@@ -105,6 +105,20 @@ export class StatsWebSocketServer {
   private port: number;
   private lastBroadcastTime = 0;
   private broadcastThrottleMs = 1000; // minimum interval between broadcasts
+  // Cache for expensive full-summary queries: avoids re-querying all 8 base tables
+  // when multiple broadcasts fire within a short window.
+  private baseSummaryCache = new Map<string, {
+    summary: any;
+    topDomains: any;
+    topIPs: any;
+    proxyStats: any;
+    countryStats: any;
+    deviceStats: any;
+    ruleStats: any;
+    hourlyStats: any;
+    ts: number;
+  }>();
+  private static BASE_SUMMARY_CACHE_TTL_MS = 2000;
 
   constructor(port: number, db: StatsDatabase) {
     this.port = port;
@@ -653,7 +667,15 @@ export class StatsWebSocketServer {
       !ipsPage;
 
     const summary = wantsFullSummary
-      ? this.db.getSummary(resolvedBackendId, range.start, range.end)
+      ? (() => {
+          const baseCacheKey = `${resolvedBackendId}|${range.start || ''}|${range.end || ''}`;
+          const cached = this.baseSummaryCache.get(baseCacheKey);
+          if (cached && Date.now() - cached.ts < StatsWebSocketServer.BASE_SUMMARY_CACHE_TTL_MS) {
+            return cached.summary;
+          }
+          const result = this.db.getSummary(resolvedBackendId, range.start, range.end);
+          return result;
+        })()
       : {
           totalUpload: 0,
           totalDownload: 0,
@@ -662,8 +684,13 @@ export class StatsWebSocketServer {
           uniqueIPs: 0,
         };
 
+    // Use cached base summary data to avoid repeated expensive DB queries
+    const baseCacheKey = `${resolvedBackendId}|${range.start || ''}|${range.end || ''}`;
+    let baseCached = this.baseSummaryCache.get(baseCacheKey);
+    const baseCacheValid = baseCached && Date.now() - baseCached.ts < StatsWebSocketServer.BASE_SUMMARY_CACHE_TTL_MS;
+
     const dbTopDomains = wantsFullSummary
-      ? this.db.getTopDomains(resolvedBackendId, 100, range.start, range.end)
+      ? (baseCacheValid ? baseCached!.topDomains : this.db.getTopDomains(resolvedBackendId, 100, range.start, range.end))
       : undefined;
     const topDomains = wantsFullSummary && dbTopDomains
       ? includeRealtime
@@ -672,7 +699,7 @@ export class StatsWebSocketServer {
       : [];
 
     const dbTopIPs = wantsFullSummary
-      ? this.db.getTopIPs(resolvedBackendId, 100, range.start, range.end)
+      ? (baseCacheValid ? baseCached!.topIPs : this.db.getTopIPs(resolvedBackendId, 100, range.start, range.end))
       : undefined;
     const topIPs = wantsFullSummary && dbTopIPs
       ? includeRealtime
@@ -681,7 +708,7 @@ export class StatsWebSocketServer {
       : [];
 
     const dbProxyStats = wantsFullSummary
-      ? this.db.getProxyStats(resolvedBackendId, range.start, range.end)
+      ? (baseCacheValid ? baseCached!.proxyStats : this.db.getProxyStats(resolvedBackendId, range.start, range.end))
       : undefined;
     const proxyStats = wantsFullSummary && dbProxyStats
       ? includeRealtime
@@ -690,7 +717,7 @@ export class StatsWebSocketServer {
       : [];
 
     const dbCountryStats = wantsFullSummary
-      ? this.db.getCountryStats(resolvedBackendId, 50, range.start, range.end)
+      ? (baseCacheValid ? baseCached!.countryStats : this.db.getCountryStats(resolvedBackendId, 50, range.start, range.end))
       : undefined;
     const countryStats = wantsFullSummary && dbCountryStats
       ? includeRealtime
@@ -699,7 +726,7 @@ export class StatsWebSocketServer {
       : undefined;
 
     const dbDeviceStats = wantsFullSummary
-      ? this.db.getDevices(resolvedBackendId, 50, range.start, range.end)
+      ? (baseCacheValid ? baseCached!.deviceStats : this.db.getDevices(resolvedBackendId, 50, range.start, range.end))
       : undefined;
     const deviceStats = wantsFullSummary && dbDeviceStats
       ? includeRealtime
@@ -708,7 +735,7 @@ export class StatsWebSocketServer {
       : undefined;
 
     const dbRuleStats = wantsFullSummary
-      ? this.db.getRuleStats(resolvedBackendId, range.start, range.end)
+      ? (baseCacheValid ? baseCached!.ruleStats : this.db.getRuleStats(resolvedBackendId, range.start, range.end))
       : undefined;
     const ruleStats = wantsFullSummary && dbRuleStats
       ? includeRealtime
@@ -716,8 +743,30 @@ export class StatsWebSocketServer {
         : dbRuleStats
       : undefined;
     const hourlyStats = wantsFullSummary
-      ? this.db.getHourlyStats(resolvedBackendId, 24, range.start, range.end)
+      ? (baseCacheValid ? baseCached!.hourlyStats : this.db.getHourlyStats(resolvedBackendId, 24, range.start, range.end))
       : [];
+
+    // Update base summary cache for future broadcasts
+    if (wantsFullSummary && !baseCacheValid) {
+      this.baseSummaryCache.set(baseCacheKey, {
+        summary,
+        topDomains: dbTopDomains,
+        topIPs: dbTopIPs,
+        proxyStats: dbProxyStats,
+        countryStats: dbCountryStats,
+        deviceStats: dbDeviceStats,
+        ruleStats: dbRuleStats,
+        hourlyStats,
+        ts: Date.now(),
+      });
+      // Evict stale entries
+      for (const [key, val] of this.baseSummaryCache) {
+        if (Date.now() - val.ts > StatsWebSocketServer.BASE_SUMMARY_CACHE_TTL_MS * 2) {
+          this.baseSummaryCache.delete(key);
+        }
+      }
+    }
+
     const trendStats = trend
       ? this.db.getTrafficTrendAggregated(
           resolvedBackendId,

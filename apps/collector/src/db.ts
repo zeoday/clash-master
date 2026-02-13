@@ -1311,8 +1311,9 @@ export class StatsDatabase {
       }
     }
 
-    // Execute batch upserts in a single transaction
-    const transaction = this.db.transaction(() => {
+    // Execute batch upserts in sub-transactions to reduce SQLite lock contention.
+    // Sub-transaction 1: Core aggregation tables (domain_stats, ip_stats, proxy_stats, rule_stats)
+    const tx1 = this.db.transaction(() => {
       // Domain stats
       const domainStmt = this.db.prepare(`
         INSERT INTO domain_stats (backend_id, domain, ips, total_upload, total_download, total_connections, last_seen, rules, chains)
@@ -1320,6 +1321,7 @@ export class StatsDatabase {
         ON CONFLICT(backend_id, domain) DO UPDATE SET
           ips = CASE 
             WHEN domain_stats.ips IS NULL THEN @ip
+            WHEN LENGTH(domain_stats.ips) > 4000 THEN domain_stats.ips
             WHEN INSTR(domain_stats.ips, @ip) > 0 THEN domain_stats.ips
             ELSE domain_stats.ips || ',' || @ip
           END,
@@ -1329,11 +1331,13 @@ export class StatsDatabase {
           last_seen = @timestamp,
           rules = CASE 
             WHEN domain_stats.rules IS NULL THEN @rule
+            WHEN LENGTH(domain_stats.rules) > 4000 THEN domain_stats.rules
             WHEN INSTR(domain_stats.rules, @rule) > 0 THEN domain_stats.rules
             ELSE domain_stats.rules || ',' || @rule
           END,
           chains = CASE 
             WHEN domain_stats.chains IS NULL THEN @chain
+            WHEN LENGTH(domain_stats.chains) > 4000 THEN domain_stats.chains
             WHEN INSTR(domain_stats.chains, @chain) > 0 THEN domain_stats.chains
             ELSE domain_stats.chains || ',' || @chain
           END
@@ -1364,6 +1368,7 @@ export class StatsDatabase {
         ON CONFLICT(backend_id, ip) DO UPDATE SET
           domains = CASE 
             WHEN ip_stats.domains IS NULL THEN @domain
+            WHEN LENGTH(ip_stats.domains) > 4000 THEN ip_stats.domains
             WHEN INSTR(ip_stats.domains, @domain) > 0 THEN ip_stats.domains
             ELSE ip_stats.domains || ',' || @domain
           END,
@@ -1373,11 +1378,13 @@ export class StatsDatabase {
           last_seen = @timestamp,
           chains = CASE 
             WHEN ip_stats.chains IS NULL THEN @chain
+            WHEN LENGTH(ip_stats.chains) > 4000 THEN ip_stats.chains
             WHEN INSTR(ip_stats.chains, @chain) > 0 THEN ip_stats.chains
             ELSE ip_stats.chains || ',' || @chain
           END,
           rules = CASE 
             WHEN ip_stats.rules IS NULL THEN @rule
+            WHEN LENGTH(ip_stats.rules) > 4000 THEN ip_stats.rules
             WHEN INSTR(ip_stats.rules, @rule) > 0 THEN ip_stats.rules
             ELSE ip_stats.rules || ',' || @rule
           END
@@ -1501,6 +1508,11 @@ export class StatsDatabase {
           timestamp
         });
       }
+    });
+    tx1();
+
+    // Sub-transaction 2: Detail tables + minute/hourly tables
+    const tx2 = this.db.transaction(() => {
 
       // Rule domain traffic
       const ruleDomainStmt = this.db.prepare(`
@@ -1630,6 +1642,7 @@ export class StatsDatabase {
         UPDATE ip_proxy_stats
         SET domains = CASE
           WHEN domains IS NULL OR domains = '' THEN @domain
+          WHEN LENGTH(domains) > 4000 THEN domains
           WHEN INSTR(',' || domains || ',', ',' || @domain || ',') > 0 THEN domains
           ELSE domains || ',' || @domain
         END
@@ -1658,6 +1671,11 @@ export class StatsDatabase {
           }
         }
       }
+    });
+    tx2();
+
+    // Sub-transaction 3: Device tables
+    const tx3 = this.db.transaction(() => {
       // Device stats
       const deviceStmt = this.db.prepare(`
         INSERT INTO device_stats (backend_id, source_ip, total_upload, total_download, total_connections, last_seen)
@@ -1726,8 +1744,7 @@ export class StatsDatabase {
         });
       }
     });
-
-    transaction();
+    tx3();
   }
 
   private toMinuteKey(date: Date): string {
@@ -2101,7 +2118,7 @@ export class StatsDatabase {
           SUM(download) as totalDownload,
           SUM(connections) as totalConnections,
           MAX(minute) as lastSeen,
-          GROUP_CONCAT(DISTINCT ip) as ips,
+          '' as ips,
           GROUP_CONCAT(DISTINCT rule) as rules,
           GROUP_CONCAT(DISTINCT chain) as chains
         FROM minute_dim_stats

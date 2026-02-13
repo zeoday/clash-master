@@ -139,12 +139,25 @@ export class StatsWebSocketServer {
       // Verify authentication
       try {
         const url = new URL(req.url || '', `http://${req.headers.host}`);
-        const token = url.searchParams.get('token');
+        let token = url.searchParams.get('token');
+        
+        // Try getting token from cookie if not in URL
+        if (!token && req.headers.cookie) {
+          const cookies = req.headers.cookie.split(';').reduce((acc, cookie) => {
+            const [key, value] = cookie.trim().split('=');
+            acc[key] = value;
+            return acc;
+          }, {} as Record<string, string>);
+          
+          if (cookies['neko-session']) {
+            token = cookies['neko-session'];
+          }
+        }
         
         // Check if auth is required and verify token
         if (this.authService.isAuthRequired()) {
           if (!token) {
-            console.log(`[WebSocket] Rejected connection from ${req.socket.remoteAddress}: Missing token`);
+            console.log(`[WebSocket] Rejected connection from ${req.socket.remoteAddress}: Missing token or cookie`);
             ws.close(4001, 'Authentication required');
             return;
           }

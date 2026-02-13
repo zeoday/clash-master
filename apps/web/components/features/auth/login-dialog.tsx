@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 
 const CAT_OPEN_EYE = "/images/neko-open-eye.png";
 const CAT_CLOSE_EYE = "/images/neko-open-close.png";
+const NEKO_WELCOME = "/images/neko-welcome.png";
 
 interface LoginDialogProps {
   open: boolean;
@@ -54,7 +55,7 @@ export function LoginDialog({ open, onOpenChange, onLogin }: LoginDialogProps) {
           setToken("");
           setIsSuccess(false);
           onOpenChange(false);
-        }, 1500);
+        }, 2500);
       } else {
         setError(t("invalidToken"));
         setIsLoading(false);
@@ -72,6 +73,9 @@ export function LoginDialog({ open, onOpenChange, onLogin }: LoginDialogProps) {
         showCloseButton={!isSuccess}
         aria-describedby={undefined}
         onOpenAutoFocus={(e) => e.preventDefault()}
+        overlayClassName={cn(
+          isSuccess && "delay-[500ms] duration-[2000ms] ease-linear backdrop-blur-none bg-transparent"
+        )}
       >
         <AnimatePresence mode="wait">
           {isSuccess ? (
@@ -80,37 +84,48 @@ export function LoginDialog({ open, onOpenChange, onLogin }: LoginDialogProps) {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="flex flex-col items-center justify-center py-10 space-y-4 bg-background border shadow-lg rounded-lg p-6"
+              className="flex flex-col items-center justify-center py-14 px-10 space-y-6 bg-background border shadow-lg rounded-xl min-w-[28rem]"
             >
-              <div className="relative w-32 h-32 mb-4">
+              <div className="relative w-50 h-50">
                  <Image
-                  src={CAT_OPEN_EYE}
-                  alt="Success Cat"
+                  src={NEKO_WELCOME}
+                  alt="Welcome Neko"
                   fill
                   className="object-contain drop-shadow-xl"
                   priority
                 />
-                <motion.div
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ type: "spring", stiffness: 200, damping: 10, delay: 0.1 }}
-                  className="absolute -bottom-2 -right-2 w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-white shadow-lg shadow-green-500/20 z-10"
-                >
-                  <Check className="w-6 h-6 stroke-[3]" />
-                </motion.div>
               </div>
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 }}
+                transition={{ delay: 0.3, duration: 0.5 }}
                 className="text-center"
               >
-                <h3 className="text-xl font-bold text-green-600 dark:text-green-400">
-                  {t("loginSuccess") || "Login Successful"}
-                </h3>
-                <p className="text-sm text-muted-foreground mt-1">
-                  {t("redirecting") || "Redirecting to dashboard..."}
+                <div className="flex items-center justify-center gap-2">
+                  <motion.div
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    transition={{ type: "spring", stiffness: 200, damping: 10, delay: 0.1 }}
+                    className="w-6 h-6 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-500 shadow-sm"
+                  >
+                    <Check className="w-3.5 h-3.5 stroke-[3]" />
+                  </motion.div>
+                  <h3 className="text-2xl font-semibold text-foreground tracking-tight">
+                    {t("loginSuccess") || "Welcome back"}
+                  </h3>
+                </div>
+                <p className="text-sm text-muted-foreground/75 mt-2 font-medium">
+                  {t("redirecting") || "Syncing network statistics..."}
                 </p>
+                <div className="w-64 h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full mt-5 overflow-hidden relative mx-auto">
+                    <motion.div 
+                        initial={{ width: "0%" }}
+                        animate={{ width: "100%" }}
+                        transition={{ duration: 2.5, ease: "easeInOut" }}
+                        className="absolute left-0 top-0 h-full bg-gradient-to-r from-[#181878] via-[#668af4] to-[#181878] animate-gradient-x"
+                        style={{ backgroundSize: "200% 100%" }}
+                    />
+                </div>
               </motion.div>
             </motion.div>
           ) : (

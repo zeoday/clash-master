@@ -337,7 +337,9 @@
     "invalidToken": "访问令牌无效",
     "loginError": "登录失败，请重试",
     "loggingIn": "登录中...",
-    "login": "登录"
+    "login": "登录",
+    "loginSuccess": "欢迎回来",
+    "redirecting": "正在同步网络数据..."
   },
   "backend": {
     "title": "设置",

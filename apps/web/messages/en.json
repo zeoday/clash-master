@@ -338,7 +338,9 @@
     "invalidToken": "Invalid access token",
     "loginError": "Login failed, please try again",
     "loggingIn": "Logging in...",
-    "login": "Login"
+    "login": "Login",
+    "loginSuccess": "Welcome back",
+    "redirecting": "Syncing network statistics..."
   },
   "backend": {
     "title": "Settings",

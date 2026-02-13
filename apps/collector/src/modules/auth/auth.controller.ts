@@ -41,7 +41,29 @@ export async function authController(app: FastifyInstance) {
     }
 
     const result = await authService.verifyToken(token);
+    
+    if (result.valid) {
+      // Set valid token as HttpOnly cookie
+      const isProduction = process.env.NODE_ENV === 'production';
+      reply.setCookie('neko-session', token, {
+        path: '/',
+        httpOnly: true,
+        secure: isProduction, // Only use secure in production
+        sameSite: 'strict',
+        maxAge: 60 * 60 * 24 * 7, // 7 days
+      });
+    }
+
     return result;
+  });
+
+  /**
+   * POST /api/auth/logout
+   * Clear session cookie
+   */
+  app.post('/logout', async (request, reply) => {
+    reply.clearCookie('neko-session', { path: '/' });
+    return { success: true };
   });
 
   /**
@@ -90,17 +112,30 @@ export async function authController(app: FastifyInstance) {
     // If auth is required, verify token first
     // Skip verification if forced off
     if (authService.isAuthRequired() && !authService.isForceAccessControlOff()) {
-      if (!token) {
-        return reply.status(401).send({ 
-          error: 'Token is required to disable authentication' 
-        });
+      // Check cookie first
+      let valid = false;
+      const cookieToken = request.cookies?.['neko-session'];
+      
+      if (cookieToken) {
+        const verifyResult = await authService.verifyToken(cookieToken);
+        if (verifyResult.valid) {
+          valid = true;
+        }
       }
 
-      const verifyResult = await authService.verifyToken(token);
-      if (!verifyResult.valid) {
-        return reply.status(401).send({ 
-          error: verifyResult.message || 'Invalid token' 
-        });
+      if (!valid) {
+        if (!token) {
+          return reply.status(401).send({ 
+            error: 'Token is required to disable authentication' 
+          });
+        }
+  
+        const verifyResult = await authService.verifyToken(token);
+        if (!verifyResult.valid) {
+          return reply.status(401).send({ 
+            error: verifyResult.message || 'Invalid token' 
+          });
+        }
       }
     }
 
@@ -126,17 +161,30 @@ export async function authController(app: FastifyInstance) {
     // Verify current token if auth is enabled
     // Skip verification if forced off
     if (authService.isAuthRequired() && !authService.isForceAccessControlOff()) {
-      if (!currentToken) {
-        return reply.status(401).send({ 
-          error: 'Current token is required' 
-        });
+      // Check cookie first
+      let valid = false;
+      const cookieToken = request.cookies?.['neko-session'];
+      
+      if (cookieToken) {
+        const verifyResult = await authService.verifyToken(cookieToken);
+        if (verifyResult.valid) {
+          valid = true;
+        }
       }
 
-      const verifyResult = await authService.verifyToken(currentToken);
-      if (!verifyResult.valid) {
-        return reply.status(401).send({ 
-          error: verifyResult.message || 'Invalid current token' 
-        });
+      if (!valid) {
+        if (!currentToken) {
+          return reply.status(401).send({ 
+            error: 'Current token is required' 
+          });
+        }
+  
+        const verifyResult = await authService.verifyToken(currentToken);
+        if (!verifyResult.valid) {
+          return reply.status(401).send({ 
+            error: verifyResult.message || 'Invalid current token' 
+          });
+        }
       }
     }
 

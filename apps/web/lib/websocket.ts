@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { StatsSummary } from '@neko-master/shared';
 import type { TimeRange } from '@/lib/api';
-import { getStoredToken } from '@/lib/auth-queries';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
@@ -216,10 +215,8 @@ export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
     }
     const wsUrl = wsUrls[wsUrlIndexRef.current]!;
     
-    const token = getStoredToken();
-    const urlWithToken = token 
-      ? `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}token=${token}`
-      : wsUrl;
+    // Cookie is handled automatically by browser
+    const urlWithToken = wsUrl;
       
     console.log('[WebSocket] Connecting to:', wsUrl);
 

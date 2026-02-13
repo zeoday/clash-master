@@ -57,7 +57,7 @@ import { useSettings, FaviconProvider, getFaviconUrl } from "@/lib/settings";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
-import { useAuthState, authKeys, getStoredToken } from "@/lib/auth-queries";
+import { useAuthState, authKeys } from "@/lib/auth-queries";
 
 // Favicon Provider Preview Component
 function FaviconProviderPreview({
@@ -780,14 +780,12 @@ export function BackendConfigDialog({
   const handleDisableAuth = async () => {
     setConfirmDisableAuthDialogOpen(true);
   };
-
   // Confirm disable auth
   const confirmDisableAuth = async () => {
     setAuthLoading(true);
     try {
-      // Try to get stored token for verification
-      const storedToken = getStoredToken();
-      await api.disableAuth(storedToken || undefined);
+      // Cookie is used for authentication
+      await api.disableAuth();
       setAuthToken("");
       setConfirmDisableAuthDialogOpen(false);
       // Invalidate auth state cache to trigger refetch

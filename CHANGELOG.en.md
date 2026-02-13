@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.6] - 2026-02-13
+
+### Security
+- **Cookie-based Authentication System**
+  - Replaced localStorage token storage with HttpOnly cookies for enhanced security
+  - WebSocket connections now authenticate via cookies instead of URL tokens
+  - Implemented server-side session management with automatic refresh
+
+### Changed
+- Refactored authentication flow with server-side cookie setting after login
+- Added welcome page image asset
+
 ## [1.2.5] - 2026-02-13
 
 ### Added

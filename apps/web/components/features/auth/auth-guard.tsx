@@ -1,19 +1,21 @@
 "use client";
 
-import { useRequireAuth, useLogin } from "@/lib/auth-queries";
+import { useRequireAuth, useAuth } from "@/lib/auth";
 import { LoginDialog } from "./login-dialog";
 
 export function AuthGuard() {
   const { showLogin } = useRequireAuth();
-  const loginMutation = useLogin();
+  const { login, confirmLogin } = useAuth();
   
   const handleLogin = async (token: string) => {
-    try {
-      await loginMutation.mutateAsync(token);
+    const success = await login(token, false);
+    if (success) {
+      setTimeout(() => {
+        confirmLogin();
+      }, 2500);
       return true;
-    } catch (e) {
-      return false;
     }
+    return false;
   };
 
   if (!showLogin) return null;

@@ -22,7 +22,7 @@ import {
 } from "@/lib/stats-query-keys";
 import { useStableTimeRange } from "@/lib/hooks/use-stable-time-range";
 import { useStatsWebSocket } from "@/lib/websocket";
-import { useRequireAuth } from "@/lib/auth-queries";
+import { useRequireAuth } from "@/lib/auth";
 import type {
   StatsSummary,
   CountryStats,

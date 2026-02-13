@@ -6,6 +6,7 @@
 
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import cookie from '@fastify/cookie';
 import type { StatsDatabase } from './db.js';
 import type { RealtimeStore } from './realtime.js';
 
@@ -39,6 +40,12 @@ export async function createApp(options: AppOptions) {
   await app.register(cors, {
     origin: true,
     credentials: true,
+  });
+
+  // Register Cookie
+  await app.register(cookie, {
+    secret: process.env.COOKIE_SECRET || 'neko-master-secret-change-me', // secure cookie sign
+    parseOptions: {} 
   });
 
   // Create services
@@ -228,6 +235,7 @@ export async function createApp(options: AppOptions) {
       '/health',
       '/api/auth/state',
       '/api/auth/verify',
+      '/api/auth/logout', // Add logout as public so we can clear cookies even if invalid
     ];
     
     // Check if route is public
@@ -240,7 +248,16 @@ export async function createApp(options: AppOptions) {
       return;
     }
 
-    // Get token from header
+    // Try to get token from Cookie first
+    const cookieToken = request.cookies['neko-session'];
+    if (cookieToken) {
+      const verifyResult = await authService.verifyToken(cookieToken);
+      if (verifyResult.valid) {
+        return;
+      }
+    }
+
+    // Fallback: Get token from header (for backward compatibility / API clients)
     const authHeader = request.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return reply.status(401).send({ error: 'Authentication required' });

@@ -4,6 +4,7 @@
 
 - Chinese: `docs/architecture.md`
 - English: `docs/architecture.en.md`
+- ClickHouse Refactor Plan: `docs/clickhouse-refactor-plan.md`
 
 ## Agent
 

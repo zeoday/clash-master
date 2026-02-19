@@ -24,6 +24,7 @@ out/
 *.sqlite
 *.sqlite3
 geoip/
+data/
 
 # Logs
 logs/

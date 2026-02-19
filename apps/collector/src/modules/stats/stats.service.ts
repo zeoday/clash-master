@@ -19,6 +19,7 @@ import type {
   HourlyStats,
   DeviceStats,
 } from './stats.types.js';
+import { ClickHouseReader } from '../../clickhouse-reader.js';
 
 interface PaginatedStatsOptions {
   offset?: number;
@@ -30,11 +31,59 @@ interface PaginatedStatsOptions {
   end?: string;
 }
 
+type RoutedSource = 'clickhouse' | 'sqlite';
+
 export class StatsService {
+  private clickHouseReader: ClickHouseReader;
+  private routeMetricsIntervalMs = Math.max(
+    1000,
+    Number.parseInt(process.env.STATS_ROUTE_METRICS_LOG_INTERVAL_MS || '60000', 10) || 60000,
+  );
+  private routeMetricsWindowStartedAt = Date.now();
+  private routeMetrics: Record<string, { clickhouse: number; sqlite: number }> = {};
+
   constructor(
     private db: StatsDatabase,
     private realtimeStore: RealtimeStore,
-  ) {}
+  ) {
+    this.clickHouseReader = new ClickHouseReader();
+  }
+
+  private shouldUseClickHouse(timeRange: TimeRange): boolean {
+    return (
+      timeRange.active &&
+      this.clickHouseReader.shouldUseForRange(timeRange.start, timeRange.end)
+    );
+  }
+
+  private recordRoute(route: string, source: RoutedSource): void {
+    const existing = this.routeMetrics[route] || { clickhouse: 0, sqlite: 0 };
+    existing[source] += 1;
+    this.routeMetrics[route] = existing;
+    this.maybeLogRouteMetrics();
+  }
+
+  private maybeLogRouteMetrics(): void {
+    if (this.routeMetricsIntervalMs <= 0) return;
+    const now = Date.now();
+    const elapsedMs = now - this.routeMetricsWindowStartedAt;
+    if (elapsedMs < this.routeMetricsIntervalMs) return;
+
+    const entries = Object.entries(this.routeMetrics);
+    if (entries.length > 0) {
+      const parts = entries
+        .map(([name, counts]) => {
+          const total = counts.clickhouse + counts.sqlite;
+          const chRate = total > 0 ? (counts.clickhouse / total) * 100 : 0;
+          return `${name}=ch:${counts.clickhouse},sqlite:${counts.sqlite},ch_rate:${chRate.toFixed(1)}%`;
+        })
+        .join(' | ');
+      console.info(`[Stats Route Metrics] ${parts} window_sec=${(elapsedMs / 1000).toFixed(1)}`);
+    }
+
+    this.routeMetricsWindowStartedAt = now;
+    this.routeMetrics = {};
+  }
 
   /**
    * Resolve backend ID from query param or active backend fallback
@@ -155,10 +204,128 @@ export class StatsService {
     };
   }
 
+  async getSummaryWithRouting(
+    backendId: number,
+    timeRange: TimeRange,
+  ): Promise<SummaryResponse> {
+    const backend = this.db.getBackend(backendId);
+    if (!backend) {
+      throw new Error('Backend not found');
+    }
+
+    const includeRealtime = this.shouldIncludeRealtime(timeRange);
+    const shouldUseCH =
+      timeRange.active &&
+      this.clickHouseReader.shouldUseForRange(timeRange.start, timeRange.end);
+
+    if (!shouldUseCH || !timeRange.start || !timeRange.end) {
+      this.recordRoute('summary', 'sqlite');
+      return this.getSummary(backendId, timeRange);
+    }
+
+    const [summaryCH, topDomainsCH, topIPsCH, hourlyStatsCH, trafficInRangeCH] =
+      await Promise.all([
+        this.clickHouseReader.getSummary(backendId, timeRange.start, timeRange.end),
+        this.clickHouseReader.getTopDomainsLight(
+          backendId,
+          10,
+          timeRange.start,
+          timeRange.end,
+        ),
+        this.clickHouseReader.getTopIPsLight(
+          backendId,
+          10,
+          timeRange.start,
+          timeRange.end,
+        ),
+        this.clickHouseReader.getHourlyStats(
+          backendId,
+          24,
+          timeRange.start,
+          timeRange.end,
+        ),
+        this.clickHouseReader.getTrafficInRange(
+          backendId,
+          timeRange.start,
+          timeRange.end,
+        ),
+      ]);
+
+    const summary =
+      summaryCH || this.db.getSummary(backendId, timeRange.start, timeRange.end);
+    const summaryWithRealtime = includeRealtime
+      ? this.realtimeStore.applySummaryDelta(backendId, summary)
+      : summary;
+
+    const dbTopDomains =
+      topDomainsCH ||
+      this.db.getTopDomainsLight(backendId, 10, timeRange.start, timeRange.end);
+    const topDomains = includeRealtime
+      ? this.realtimeStore.mergeTopDomains(backendId, dbTopDomains, 10)
+      : dbTopDomains;
+
+    const dbTopIPs =
+      topIPsCH || this.db.getTopIPsLight(backendId, 10, timeRange.start, timeRange.end);
+    const topIPs = includeRealtime
+      ? this.realtimeStore.mergeTopIPs(backendId, dbTopIPs, 10)
+      : dbTopIPs;
+
+    const dbProxyStats = this.db.getProxyStats(backendId, timeRange.start, timeRange.end);
+    const proxyStats = includeRealtime
+      ? this.realtimeStore.mergeProxyStats(backendId, dbProxyStats)
+      : dbProxyStats;
+
+    const dbRuleStats = this.db.getRuleStats(backendId, timeRange.start, timeRange.end);
+    const ruleStats = includeRealtime
+      ? this.realtimeStore.mergeRuleStats(backendId, dbRuleStats)
+      : dbRuleStats;
+
+    const hourlyStats =
+      hourlyStatsCH ||
+      this.db.getHourlyStats(backendId, 24, timeRange.start, timeRange.end);
+    const todayTraffic =
+      trafficInRangeCH ||
+      this.db.getTrafficInRange(backendId, timeRange.start, timeRange.end);
+    const todayDelta = includeRealtime
+      ? this.realtimeStore.getTodayDelta(backendId)
+      : { upload: 0, download: 0 };
+    const usedCH =
+      !!summaryCH || !!topDomainsCH || !!topIPsCH || !!hourlyStatsCH || !!trafficInRangeCH;
+    this.recordRoute('summary', usedCH ? 'clickhouse' : 'sqlite');
+
+    return {
+      backend: {
+        id: backend.id,
+        name: backend.name,
+        isActive: backend.is_active,
+        listening: backend.listening,
+      },
+      totalConnections: summaryWithRealtime.totalConnections,
+      totalUpload: summaryWithRealtime.totalUpload,
+      totalDownload: summaryWithRealtime.totalDownload,
+      totalDomains: summary.uniqueDomains,
+      totalIPs: summary.uniqueIPs,
+      totalRules: ruleStats.length,
+      totalProxies: proxyStats.length,
+      todayUpload: todayTraffic.upload + todayDelta.upload,
+      todayDownload: todayTraffic.download + todayDelta.download,
+      topDomains,
+      topIPs,
+      proxyStats,
+      ruleStats,
+      hourlyStats,
+    };
+  }
+
   /**
    * Get global summary across all backends
    */
   getGlobalSummary(): GlobalSummary {
+    return this.db.getGlobalSummary();
+  }
+
+  getGlobalSummaryWithRouting(): GlobalSummary {
+    this.recordRoute('global', 'sqlite');
     return this.db.getGlobalSummary();
   }
 
@@ -188,6 +355,47 @@ export class StatsService {
     return stats;
   }
 
+  async getDomainStatsPaginatedWithRouting(
+    backendId: number,
+    timeRange: TimeRange,
+    options: PaginatedStatsOptions,
+  ): Promise<PaginatedDomainStats> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    const stats =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getDomainStatsPaginated(
+            backendId,
+            timeRange.start,
+            timeRange.end,
+            options,
+          )
+        : null;
+
+    const resolvedStats =
+      stats ||
+      this.db.getDomainStatsPaginated(backendId, {
+        offset: options.offset,
+        limit: options.limit,
+        sortBy: options.sortBy,
+        sortOrder: options.sortOrder,
+        search: options.search,
+        start: timeRange.start,
+        end: timeRange.end,
+      });
+    this.recordRoute('domains', stats ? 'clickhouse' : 'sqlite');
+
+    if (this.shouldIncludeRealtime(timeRange)) {
+      return this.realtimeStore.mergeDomainStatsPaginated(backendId, resolvedStats, {
+        offset: options.offset,
+        limit: options.limit,
+        sortBy: options.sortBy,
+        sortOrder: options.sortOrder,
+        search: options.search,
+      });
+    }
+    return resolvedStats;
+  }
+
   /**
    * Get IP statistics for a specific backend (paginated)
    */
@@ -214,6 +422,47 @@ export class StatsService {
     return stats;
   }
 
+  async getIPStatsPaginatedWithRouting(
+    backendId: number,
+    timeRange: TimeRange,
+    options: PaginatedStatsOptions,
+  ): Promise<PaginatedIPStats> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    const stats =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getIPStatsPaginated(
+            backendId,
+            timeRange.start,
+            timeRange.end,
+            options,
+          )
+        : null;
+
+    const resolvedStats =
+      stats ||
+      this.db.getIPStatsPaginated(backendId, {
+        offset: options.offset,
+        limit: options.limit,
+        sortBy: options.sortBy,
+        sortOrder: options.sortOrder,
+        search: options.search,
+        start: timeRange.start,
+        end: timeRange.end,
+      });
+    this.recordRoute('ips', stats ? 'clickhouse' : 'sqlite');
+
+    if (this.shouldIncludeRealtime(timeRange)) {
+      return this.realtimeStore.mergeIPStatsPaginated(backendId, resolvedStats, {
+        offset: options.offset,
+        limit: options.limit,
+        sortBy: options.sortBy,
+        sortOrder: options.sortOrder,
+        search: options.search,
+      });
+    }
+    return resolvedStats;
+  }
+
   /**
    * Get per-proxy traffic breakdown for a specific domain
    */
@@ -225,6 +474,29 @@ export class StatsService {
     sourceChain?: string,
   ): any[] {
     return this.db.getDomainProxyStats(backendId, domain, timeRange.start, timeRange.end, sourceIP, sourceChain);
+  }
+
+  async getDomainProxyStatsWithRouting(
+    backendId: number,
+    domain: string,
+    timeRange: TimeRange,
+    sourceIP?: string,
+  ): Promise<any[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    if (shouldUseCH && timeRange.start && timeRange.end) {
+      const ch = await this.clickHouseReader.getGroupedProxyStats(
+        backendId,
+        timeRange.start,
+        timeRange.end,
+        { domain, sourceIP },
+      );
+      if (ch) {
+        this.recordRoute('domains.proxy-stats', 'clickhouse');
+        return ch;
+      }
+    }
+    this.recordRoute('domains.proxy-stats', 'sqlite');
+    return this.db.getDomainProxyStats(backendId, domain, timeRange.start, timeRange.end, sourceIP);
   }
 
   /**
@@ -241,6 +513,31 @@ export class StatsService {
     return this.db.getDomainIPDetails(backendId, domain, timeRange.start, timeRange.end, limit, sourceIP, sourceChain);
   }
 
+  async getDomainIPDetailsWithRouting(
+    backendId: number,
+    domain: string,
+    timeRange: TimeRange,
+    limit: number,
+    sourceIP?: string,
+  ): Promise<IPStats[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    if (shouldUseCH && timeRange.start && timeRange.end) {
+      const ch = await this.clickHouseReader.getGroupedIPs(
+        backendId,
+        timeRange.start,
+        timeRange.end,
+        limit,
+        { domain, sourceIP },
+      );
+      if (ch) {
+        this.recordRoute('domains.ip-details', 'clickhouse');
+        return ch;
+      }
+    }
+    this.recordRoute('domains.ip-details', 'sqlite');
+    return this.db.getDomainIPDetails(backendId, domain, timeRange.start, timeRange.end, limit, sourceIP);
+  }
+
   /**
    * Get per-proxy traffic breakdown for a specific IP
    */
@@ -252,6 +549,29 @@ export class StatsService {
     sourceChain?: string,
   ): any[] {
     return this.db.getIPProxyStats(backendId, ip, timeRange.start, timeRange.end, sourceIP, sourceChain);
+  }
+
+  async getIPProxyStatsWithRouting(
+    backendId: number,
+    ip: string,
+    timeRange: TimeRange,
+    sourceIP?: string,
+  ): Promise<any[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    if (shouldUseCH && timeRange.start && timeRange.end) {
+      const ch = await this.clickHouseReader.getGroupedProxyStats(
+        backendId,
+        timeRange.start,
+        timeRange.end,
+        { ip, sourceIP },
+      );
+      if (ch) {
+        this.recordRoute('ips.proxy-stats', 'clickhouse');
+        return ch;
+      }
+    }
+    this.recordRoute('ips.proxy-stats', 'sqlite');
+    return this.db.getIPProxyStats(backendId, ip, timeRange.start, timeRange.end, sourceIP);
   }
 
   /**
@@ -268,6 +588,31 @@ export class StatsService {
     return this.db.getIPDomainDetails(backendId, ip, timeRange.start, timeRange.end, limit, sourceIP, sourceChain);
   }
 
+  async getIPDomainDetailsWithRouting(
+    backendId: number,
+    ip: string,
+    timeRange: TimeRange,
+    limit: number,
+    sourceIP?: string,
+  ): Promise<DomainStats[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    if (shouldUseCH && timeRange.start && timeRange.end) {
+      const ch = await this.clickHouseReader.getGroupedDomains(
+        backendId,
+        timeRange.start,
+        timeRange.end,
+        limit,
+        { ip, sourceIP },
+      );
+      if (ch) {
+        this.recordRoute('ips.domain-details', 'clickhouse');
+        return ch;
+      }
+    }
+    this.recordRoute('ips.domain-details', 'sqlite');
+    return this.db.getIPDomainDetails(backendId, ip, timeRange.start, timeRange.end, limit, sourceIP);
+  }
+
   /**
    * Get domains for a specific proxy/chain
    */
@@ -277,6 +622,32 @@ export class StatsService {
       return this.realtimeStore.mergeProxyDomains(backendId, chain, stats, limit);
     }
     return stats;
+  }
+
+  async getProxyDomainsWithRouting(
+    backendId: number,
+    chain: string,
+    timeRange: TimeRange,
+    limit: number,
+  ): Promise<DomainStats[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    const stats =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getGroupedDomains(
+            backendId,
+            timeRange.start,
+            timeRange.end,
+            limit,
+            { chain },
+          )
+        : null;
+    const resolvedStats =
+      stats || this.db.getProxyDomains(backendId, chain, limit, timeRange.start, timeRange.end);
+    this.recordRoute('proxies.domains', stats ? 'clickhouse' : 'sqlite');
+    if (this.shouldIncludeRealtime(timeRange)) {
+      return this.realtimeStore.mergeProxyDomains(backendId, chain, resolvedStats, limit);
+    }
+    return resolvedStats;
   }
 
   /**
@@ -290,6 +661,32 @@ export class StatsService {
     return stats;
   }
 
+  async getProxyIPsWithRouting(
+    backendId: number,
+    chain: string,
+    timeRange: TimeRange,
+    limit: number,
+  ): Promise<IPStats[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    const stats =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getGroupedIPs(
+            backendId,
+            timeRange.start,
+            timeRange.end,
+            limit,
+            { chain },
+          )
+        : null;
+    const resolvedStats =
+      stats || this.db.getProxyIPs(backendId, chain, limit, timeRange.start, timeRange.end);
+    this.recordRoute('proxies.ips', stats ? 'clickhouse' : 'sqlite');
+    if (this.shouldIncludeRealtime(timeRange)) {
+      return this.realtimeStore.mergeProxyIPs(backendId, chain, resolvedStats, limit);
+    }
+    return resolvedStats;
+  }
+
   /**
    * Get proxy/chain statistics for a specific backend
    */
@@ -299,6 +696,29 @@ export class StatsService {
       return this.realtimeStore.mergeProxyStats(backendId, stats);
     }
     return stats;
+  }
+
+  async getProxyStatsWithRouting(
+    backendId: number,
+    timeRange: TimeRange,
+  ): Promise<ProxyStats[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    const stats =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getProxyStats(
+            backendId,
+            timeRange.start,
+            timeRange.end,
+          )
+        : null;
+    const resolvedStats =
+      (stats as ProxyStats[] | null) ||
+      this.db.getProxyStats(backendId, timeRange.start, timeRange.end);
+    this.recordRoute('proxies', stats ? 'clickhouse' : 'sqlite');
+    if (this.shouldIncludeRealtime(timeRange)) {
+      return this.realtimeStore.mergeProxyStats(backendId, resolvedStats);
+    }
+    return resolvedStats;
   }
 
   /**
@@ -312,6 +732,29 @@ export class StatsService {
     return stats;
   }
 
+  async getRuleStatsWithRouting(
+    backendId: number,
+    timeRange: TimeRange,
+  ): Promise<RuleStats[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    const stats =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getRuleStats(
+            backendId,
+            timeRange.start,
+            timeRange.end,
+          )
+        : null;
+    const resolvedStats =
+      (stats as RuleStats[] | null) ||
+      this.db.getRuleStats(backendId, timeRange.start, timeRange.end);
+    this.recordRoute('rules', stats ? 'clickhouse' : 'sqlite');
+    if (this.shouldIncludeRealtime(timeRange)) {
+      return this.realtimeStore.mergeRuleStats(backendId, resolvedStats);
+    }
+    return resolvedStats;
+  }
+
   /**
    * Get domains for a specific rule
    */
@@ -321,6 +764,32 @@ export class StatsService {
       return this.realtimeStore.mergeRuleDomains(backendId, rule, stats, limit);
     }
     return stats;
+  }
+
+  async getRuleDomainsWithRouting(
+    backendId: number,
+    rule: string,
+    timeRange: TimeRange,
+    limit: number,
+  ): Promise<DomainStats[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    const stats =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getGroupedDomains(
+            backendId,
+            timeRange.start,
+            timeRange.end,
+            limit,
+            { rule },
+          )
+        : null;
+    const resolvedStats =
+      stats || this.db.getRuleDomains(backendId, rule, limit, timeRange.start, timeRange.end);
+    this.recordRoute('rules.domains', stats ? 'clickhouse' : 'sqlite');
+    if (this.shouldIncludeRealtime(timeRange)) {
+      return this.realtimeStore.mergeRuleDomains(backendId, rule, resolvedStats, limit);
+    }
+    return resolvedStats;
   }
 
   /**
@@ -334,10 +803,59 @@ export class StatsService {
     return stats;
   }
 
+  async getRuleIPsWithRouting(
+    backendId: number,
+    rule: string,
+    timeRange: TimeRange,
+    limit: number,
+  ): Promise<IPStats[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    const stats =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getGroupedIPs(
+            backendId,
+            timeRange.start,
+            timeRange.end,
+            limit,
+            { rule },
+          )
+        : null;
+    const resolvedStats =
+      stats || this.db.getRuleIPs(backendId, rule, limit, timeRange.start, timeRange.end);
+    this.recordRoute('rules.ips', stats ? 'clickhouse' : 'sqlite');
+    if (this.shouldIncludeRealtime(timeRange)) {
+      return this.realtimeStore.mergeRuleIPs(backendId, rule, resolvedStats, limit);
+    }
+    return resolvedStats;
+  }
+
   /**
    * Get per-proxy traffic breakdown for a specific domain under a specific rule
    */
   getRuleDomainProxyStats(backendId: number, rule: string, domain: string, timeRange: TimeRange): any[] {
+    return this.db.getRuleDomainProxyStats(backendId, rule, domain, timeRange.start, timeRange.end);
+  }
+
+  async getRuleDomainProxyStatsWithRouting(
+    backendId: number,
+    rule: string,
+    domain: string,
+    timeRange: TimeRange,
+  ): Promise<any[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    if (shouldUseCH && timeRange.start && timeRange.end) {
+      const ch = await this.clickHouseReader.getGroupedProxyStats(
+        backendId,
+        timeRange.start,
+        timeRange.end,
+        { rule, domain },
+      );
+      if (ch) {
+        this.recordRoute('rules.domains.proxy-stats', 'clickhouse');
+        return ch;
+      }
+    }
+    this.recordRoute('rules.domains.proxy-stats', 'sqlite');
     return this.db.getRuleDomainProxyStats(backendId, rule, domain, timeRange.start, timeRange.end);
   }
 
@@ -348,10 +866,58 @@ export class StatsService {
     return this.db.getRuleDomainIPDetails(backendId, rule, domain, timeRange.start, timeRange.end, limit);
   }
 
+  async getRuleDomainIPDetailsWithRouting(
+    backendId: number,
+    rule: string,
+    domain: string,
+    timeRange: TimeRange,
+    limit: number,
+  ): Promise<IPStats[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    if (shouldUseCH && timeRange.start && timeRange.end) {
+      const ch = await this.clickHouseReader.getGroupedIPs(
+        backendId,
+        timeRange.start,
+        timeRange.end,
+        limit,
+        { rule, domain },
+      );
+      if (ch) {
+        this.recordRoute('rules.domains.ip-details', 'clickhouse');
+        return ch;
+      }
+    }
+    this.recordRoute('rules.domains.ip-details', 'sqlite');
+    return this.db.getRuleDomainIPDetails(backendId, rule, domain, timeRange.start, timeRange.end, limit);
+  }
+
   /**
    * Get per-proxy traffic breakdown for a specific IP under a specific rule
    */
   getRuleIPProxyStats(backendId: number, rule: string, ip: string, timeRange: TimeRange): any[] {
+    return this.db.getRuleIPProxyStats(backendId, rule, ip, timeRange.start, timeRange.end);
+  }
+
+  async getRuleIPProxyStatsWithRouting(
+    backendId: number,
+    rule: string,
+    ip: string,
+    timeRange: TimeRange,
+  ): Promise<any[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    if (shouldUseCH && timeRange.start && timeRange.end) {
+      const ch = await this.clickHouseReader.getGroupedProxyStats(
+        backendId,
+        timeRange.start,
+        timeRange.end,
+        { rule, ip },
+      );
+      if (ch) {
+        this.recordRoute('rules.ips.proxy-stats', 'clickhouse');
+        return ch;
+      }
+    }
+    this.recordRoute('rules.ips.proxy-stats', 'sqlite');
     return this.db.getRuleIPProxyStats(backendId, rule, ip, timeRange.start, timeRange.end);
   }
 
@@ -362,10 +928,40 @@ export class StatsService {
     return this.db.getRuleIPDomainDetails(backendId, rule, ip, timeRange.start, timeRange.end, limit);
   }
 
+  async getRuleIPDomainDetailsWithRouting(
+    backendId: number,
+    rule: string,
+    ip: string,
+    timeRange: TimeRange,
+    limit: number,
+  ): Promise<DomainStats[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    if (shouldUseCH && timeRange.start && timeRange.end) {
+      const ch = await this.clickHouseReader.getGroupedDomains(
+        backendId,
+        timeRange.start,
+        timeRange.end,
+        limit,
+        { rule, ip },
+      );
+      if (ch) {
+        this.recordRoute('rules.ips.domain-details', 'clickhouse');
+        return ch;
+      }
+    }
+    this.recordRoute('rules.ips.domain-details', 'sqlite');
+    return this.db.getRuleIPDomainDetails(backendId, rule, ip, timeRange.start, timeRange.end, limit);
+  }
+
   /**
    * Get rule chain flow for a specific rule
    */
   getRuleChainFlow(backendId: number, rule: string, timeRange: TimeRange): any {
+    return this.db.getRuleChainFlow(backendId, rule, timeRange.start, timeRange.end);
+  }
+
+  getRuleChainFlowWithRouting(backendId: number, rule: string, timeRange: TimeRange): any {
+    this.recordRoute('rules.chain-flow', 'sqlite');
     return this.db.getRuleChainFlow(backendId, rule, timeRange.start, timeRange.end);
   }
 
@@ -376,10 +972,20 @@ export class StatsService {
     return this.db.getAllRuleChainFlows(backendId, timeRange.start, timeRange.end);
   }
 
+  getAllRuleChainFlowsWithRouting(backendId: number, timeRange: TimeRange): any {
+    this.recordRoute('rules.chain-flow-all', 'sqlite');
+    return this.db.getAllRuleChainFlows(backendId, timeRange.start, timeRange.end);
+  }
+
   /**
    * Get rule to proxy mapping for a specific backend
    */
   getRuleProxyMap(backendId: number): any {
+    return this.db.getRuleProxyMap(backendId);
+  }
+
+  getRuleProxyMapWithRouting(backendId: number): any {
+    this.recordRoute('rule-proxy-map', 'sqlite');
     return this.db.getRuleProxyMap(backendId);
   }
 
@@ -394,6 +1000,34 @@ export class StatsService {
     return stats;
   }
 
+  async getCountryStatsWithRouting(
+    backendId: number,
+    timeRange: TimeRange,
+    limit: number,
+  ): Promise<CountryStats[]> {
+    const shouldUseCH =
+      timeRange.active &&
+      this.clickHouseReader.shouldUseForRange(timeRange.start, timeRange.end);
+
+    const stats =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getCountryStats(
+            backendId,
+            limit,
+            timeRange.start,
+            timeRange.end,
+          )
+        : null;
+    const resolvedStats =
+      stats || this.db.getCountryStats(backendId, limit, timeRange.start, timeRange.end);
+    this.recordRoute('countries', stats ? 'clickhouse' : 'sqlite');
+
+    if (this.shouldIncludeRealtime(timeRange)) {
+      return this.realtimeStore.mergeCountryStats(backendId, resolvedStats);
+    }
+    return resolvedStats;
+  }
+
   /**
    * Get device statistics for a specific backend
    */
@@ -403,6 +1037,31 @@ export class StatsService {
       return this.realtimeStore.mergeDeviceStats(backendId, stats, limit);
     }
     return stats;
+  }
+
+  async getDeviceStatsWithRouting(
+    backendId: number,
+    timeRange: TimeRange,
+    limit: number,
+  ): Promise<DeviceStats[]> {
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    const stats =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getDeviceStats(
+            backendId,
+            timeRange.start,
+            timeRange.end,
+            limit,
+          )
+        : null;
+    const resolvedStats =
+      (stats as DeviceStats[] | null) ||
+      this.db.getDevices(backendId, limit, timeRange.start, timeRange.end);
+    this.recordRoute('devices', stats ? 'clickhouse' : 'sqlite');
+    if (this.shouldIncludeRealtime(timeRange)) {
+      return this.realtimeStore.mergeDeviceStats(backendId, resolvedStats, limit);
+    }
+    return resolvedStats;
   }
 
   /**
@@ -417,6 +1076,33 @@ export class StatsService {
     return stats;
   }
 
+  async getDeviceDomainsWithRouting(
+    backendId: number,
+    sourceIP: string,
+    timeRange: TimeRange,
+    limit: number,
+  ): Promise<DomainStats[]> {
+    if (!sourceIP) return [];
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    const stats =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getGroupedDomains(
+            backendId,
+            timeRange.start,
+            timeRange.end,
+            limit,
+            { sourceIP },
+          )
+        : null;
+    const resolvedStats =
+      stats || this.db.getDeviceDomains(backendId, sourceIP, limit, timeRange.start, timeRange.end);
+    this.recordRoute('devices.domains', stats ? 'clickhouse' : 'sqlite');
+    if (this.shouldIncludeRealtime(timeRange)) {
+      return this.realtimeStore.mergeDeviceDomains(backendId, sourceIP, resolvedStats, limit);
+    }
+    return resolvedStats;
+  }
+
   /**
    * Get IPs for a specific device
    */
@@ -429,10 +1115,61 @@ export class StatsService {
     return stats;
   }
 
+  async getDeviceIPsWithRouting(
+    backendId: number,
+    sourceIP: string,
+    timeRange: TimeRange,
+    limit: number,
+  ): Promise<IPStats[]> {
+    if (!sourceIP) return [];
+    const shouldUseCH = this.shouldUseClickHouse(timeRange);
+    const stats =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getGroupedIPs(
+            backendId,
+            timeRange.start,
+            timeRange.end,
+            limit,
+            { sourceIP },
+          )
+        : null;
+    const resolvedStats =
+      stats || this.db.getDeviceIPs(backendId, sourceIP, limit, timeRange.start, timeRange.end);
+    this.recordRoute('devices.ips', stats ? 'clickhouse' : 'sqlite');
+    if (this.shouldIncludeRealtime(timeRange)) {
+      return this.realtimeStore.mergeDeviceIPs(backendId, sourceIP, resolvedStats, limit);
+    }
+    return resolvedStats;
+  }
+
   /**
    * Get hourly statistics for a specific backend
    */
   getHourlyStats(backendId: number, timeRange: TimeRange, hours: number): HourlyStats[] {
+    return this.db.getHourlyStats(backendId, hours, timeRange.start, timeRange.end);
+  }
+
+  async getHourlyStatsWithRouting(
+    backendId: number,
+    timeRange: TimeRange,
+    hours: number,
+  ): Promise<HourlyStats[]> {
+    const shouldUseCH =
+      timeRange.active &&
+      this.clickHouseReader.shouldUseForRange(timeRange.start, timeRange.end);
+    if (shouldUseCH && timeRange.start && timeRange.end) {
+      const chStats = await this.clickHouseReader.getHourlyStats(
+        backendId,
+        hours,
+        timeRange.start,
+        timeRange.end,
+      );
+      if (chStats) {
+        this.recordRoute('hourly', 'clickhouse');
+        return chStats;
+      }
+    }
+    this.recordRoute('hourly', 'sqlite');
     return this.db.getHourlyStats(backendId, hours, timeRange.start, timeRange.end);
   }
 
@@ -441,6 +1178,34 @@ export class StatsService {
    */
   getTrafficTrend(backendId: number, timeRange: TimeRange, minutes: number): TrafficTrendPoint[] {
     const base = this.db.getTrafficTrend(backendId, minutes, timeRange.start, timeRange.end);
+    if (!this.shouldIncludeRealtime(timeRange)) {
+      return base;
+    }
+    return this.realtimeStore.mergeTrend(backendId, base, minutes, 1);
+  }
+
+  async getTrafficTrendWithRouting(
+    backendId: number,
+    timeRange: TimeRange,
+    minutes: number,
+  ): Promise<TrafficTrendPoint[]> {
+    const shouldUseCH =
+      timeRange.active &&
+      this.clickHouseReader.shouldUseForRange(timeRange.start, timeRange.end);
+
+    const chBase =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getTrafficTrend(
+            backendId,
+            timeRange.start,
+            timeRange.end,
+          )
+        : null;
+    const base =
+      chBase ||
+      this.db.getTrafficTrend(backendId, minutes, timeRange.start, timeRange.end);
+    this.recordRoute('trend', chBase ? 'clickhouse' : 'sqlite');
+
     if (!this.shouldIncludeRealtime(timeRange)) {
       return base;
     }
@@ -463,10 +1228,51 @@ export class StatsService {
     return this.realtimeStore.mergeTrend(backendId, base, minutes, bucketMinutes);
   }
 
+  async getTrafficTrendAggregatedWithRouting(
+    backendId: number,
+    timeRange: TimeRange,
+    minutes: number,
+    bucketMinutes: number,
+  ): Promise<TrafficTrendPoint[]> {
+    const shouldUseCH =
+      timeRange.active &&
+      this.clickHouseReader.shouldUseForRange(timeRange.start, timeRange.end);
+
+    const chBase =
+      shouldUseCH && timeRange.start && timeRange.end
+        ? await this.clickHouseReader.getTrafficTrendAggregated(
+            backendId,
+            bucketMinutes,
+            timeRange.start,
+            timeRange.end,
+          )
+        : null;
+    const base =
+      chBase ||
+      this.db.getTrafficTrendAggregated(
+        backendId,
+        minutes,
+        bucketMinutes,
+        timeRange.start,
+        timeRange.end,
+      );
+    this.recordRoute('trend.aggregated', chBase ? 'clickhouse' : 'sqlite');
+
+    if (!this.shouldIncludeRealtime(timeRange)) {
+      return base;
+    }
+    return this.realtimeStore.mergeTrend(backendId, base, minutes, bucketMinutes);
+  }
+
   /**
    * Get recent connections for a specific backend
    */
   getRecentConnections(backendId: number, limit: number): any[] {
+    return this.db.getRecentConnections(backendId, limit);
+  }
+
+  getRecentConnectionsWithRouting(backendId: number, limit: number): any[] {
+    this.recordRoute('connections', 'sqlite');
     return this.db.getRecentConnections(backendId, limit);
   }
 }

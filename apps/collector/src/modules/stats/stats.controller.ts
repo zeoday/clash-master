@@ -120,7 +120,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     }
 
     try {
-      const result = service.getSummary(backendId, timeRange);
+      const result = await service.getSummaryWithRouting(backendId, timeRange);
       return result;
     } catch (error: unknown) {
       if (error instanceof Error && error.message === 'Backend not found') {
@@ -132,7 +132,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
 
   // Get global summary across all backends
   fastify.get('/global', async () => {
-    return service.getGlobalSummary();
+    return service.getGlobalSummaryWithRouting();
   });
 
   // Get domain statistics for a specific backend (paginated)
@@ -153,7 +153,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     const parsedOffset = parseOffset(offset);
     const parsedLimit = service.parseLimit(limit, 50, 200);
 
-    return service.getDomainStatsPaginated(backendId, timeRange, {
+    return await service.getDomainStatsPaginatedWithRouting(backendId, timeRange, {
       offset: parsedOffset,
       limit: parsedLimit,
       sortBy,
@@ -180,7 +180,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     const parsedOffset = parseOffset(offset);
     const parsedLimit = service.parseLimit(limit, 50, 200);
 
-    return service.getIPStatsPaginated(backendId, timeRange, {
+    return await service.getIPStatsPaginatedWithRouting(backendId, timeRange, {
       offset: parsedOffset,
       limit: parsedLimit,
       sortBy,
@@ -208,7 +208,12 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       return reply.status(400).send({ error: 'Domain parameter is required' });
     }
 
-    return service.getDomainProxyStats(backendId, domain, timeRange, sourceIP, sourceChain);
+    return await service.getDomainProxyStatsWithRouting(
+      backendId,
+      domain,
+      timeRange,
+      sourceIP,
+    );
   });
 
   // Get IP details for a specific domain
@@ -231,7 +236,13 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     }
 
     const effectiveLimit = service.parseLimit(limit, 100, 2000);
-    return service.getDomainIPDetails(backendId, domain, timeRange, effectiveLimit, sourceIP, sourceChain);
+    return await service.getDomainIPDetailsWithRouting(
+      backendId,
+      domain,
+      timeRange,
+      effectiveLimit,
+      sourceIP,
+    );
   });
 
   // Get per-proxy traffic breakdown for a specific IP
@@ -253,7 +264,12 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       return reply.status(400).send({ error: 'IP parameter is required' });
     }
 
-    return service.getIPProxyStats(backendId, ip, timeRange, sourceIP, sourceChain);
+    return await service.getIPProxyStatsWithRouting(
+      backendId,
+      ip,
+      timeRange,
+      sourceIP,
+    );
   });
 
   // Get domain details for a specific IP
@@ -276,7 +292,13 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     }
 
     const effectiveLimit = service.parseLimit(limit, 100, 2000);
-    return service.getIPDomainDetails(backendId, ip, timeRange, effectiveLimit, sourceIP, sourceChain);
+    return await service.getIPDomainDetailsWithRouting(
+      backendId,
+      ip,
+      timeRange,
+      effectiveLimit,
+      sourceIP,
+    );
   });
 
   // Get domains for a specific proxy/chain
@@ -299,7 +321,12 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     }
     const effectiveLimit = service.parseLimit(limit, 5000, 20000);
 
-    return service.getProxyDomains(backendId, chain, timeRange, effectiveLimit);
+    return await service.getProxyDomainsWithRouting(
+      backendId,
+      chain,
+      timeRange,
+      effectiveLimit,
+    );
   });
 
   // Get IPs for a specific proxy/chain
@@ -322,7 +349,12 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     }
     const effectiveLimit = service.parseLimit(limit, 5000, 20000);
 
-    return service.getProxyIPs(backendId, chain, timeRange, effectiveLimit);
+    return await service.getProxyIPsWithRouting(
+      backendId,
+      chain,
+      timeRange,
+      effectiveLimit,
+    );
   });
 
   // Get proxy/chain statistics for a specific backend
@@ -338,7 +370,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       return reply.status(404).send({ error: 'No backend specified or active' });
     }
 
-    return service.getProxyStats(backendId, timeRange);
+    return await service.getProxyStatsWithRouting(backendId, timeRange);
   });
 
   // Get rule statistics for a specific backend
@@ -354,7 +386,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       return reply.status(404).send({ error: 'No backend specified or active' });
     }
 
-    return service.getRuleStats(backendId, timeRange);
+    return await service.getRuleStatsWithRouting(backendId, timeRange);
   });
 
   // Get domains for a specific rule
@@ -377,7 +409,12 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     }
     const effectiveLimit = service.parseLimit(limit, 5000, 20000);
 
-    return service.getRuleDomains(backendId, rule, timeRange, effectiveLimit);
+    return await service.getRuleDomainsWithRouting(
+      backendId,
+      rule,
+      timeRange,
+      effectiveLimit,
+    );
   });
 
   // Get IPs for a specific rule
@@ -400,7 +437,12 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     }
     const effectiveLimit = service.parseLimit(limit, 5000, 20000);
 
-    return service.getRuleIPs(backendId, rule, timeRange, effectiveLimit);
+    return await service.getRuleIPsWithRouting(
+      backendId,
+      rule,
+      timeRange,
+      effectiveLimit,
+    );
   });
 
   // Get per-proxy traffic breakdown for a specific domain under a specific rule
@@ -422,7 +464,12 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       return reply.status(400).send({ error: 'Rule and domain parameters are required' });
     }
 
-    return service.getRuleDomainProxyStats(backendId, rule, domain, timeRange);
+    return await service.getRuleDomainProxyStatsWithRouting(
+      backendId,
+      rule,
+      domain,
+      timeRange,
+    );
   });
 
   // Get IP details for a specific domain under a specific rule
@@ -445,7 +492,13 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     }
     const effectiveLimit = service.parseLimit(limit, 100, 2000);
 
-    return service.getRuleDomainIPDetails(backendId, rule, domain, timeRange, effectiveLimit);
+    return await service.getRuleDomainIPDetailsWithRouting(
+      backendId,
+      rule,
+      domain,
+      timeRange,
+      effectiveLimit,
+    );
   });
 
   // Get per-proxy traffic breakdown for a specific IP under a specific rule
@@ -467,7 +520,12 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       return reply.status(400).send({ error: 'Rule and IP parameters are required' });
     }
 
-    return service.getRuleIPProxyStats(backendId, rule, ip, timeRange);
+    return await service.getRuleIPProxyStatsWithRouting(
+      backendId,
+      rule,
+      ip,
+      timeRange,
+    );
   });
 
   // Get domain details for a specific IP under a specific rule
@@ -490,7 +548,13 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     }
     const effectiveLimit = service.parseLimit(limit, 100, 2000);
 
-    return service.getRuleIPDomainDetails(backendId, rule, ip, timeRange, effectiveLimit);
+    return await service.getRuleIPDomainDetailsWithRouting(
+      backendId,
+      rule,
+      ip,
+      timeRange,
+      effectiveLimit,
+    );
   });
 
   // Get rule chain flow for a specific rule
@@ -512,7 +576,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       return reply.status(400).send({ error: 'Rule parameter is required' });
     }
 
-    return service.getRuleChainFlow(backendId, rule, timeRange);
+    return service.getRuleChainFlowWithRouting(backendId, rule, timeRange);
   });
 
   // Get all rule chain flows merged into unified DAG
@@ -528,7 +592,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       return reply.status(404).send({ error: 'No backend specified or active' });
     }
 
-    return service.getAllRuleChainFlows(backendId, timeRange);
+    return service.getAllRuleChainFlowsWithRouting(backendId, timeRange);
   });
 
   // Get rule to proxy mapping for a specific backend
@@ -539,7 +603,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       return reply.status(404).send({ error: 'No backend specified or active' });
     }
 
-    return service.getRuleProxyMap(backendId);
+    return service.getRuleProxyMapWithRouting(backendId);
   });
 
   // Get country traffic statistics for a specific backend
@@ -559,7 +623,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     const { limit } = query;
     const limitNum = service.parseLimit(limit, 50, 2000);
 
-    return service.getCountryStats(backendId, timeRange, limitNum);
+    return await service.getCountryStatsWithRouting(backendId, timeRange, limitNum);
   });
 
   // Get device statistics for a specific backend
@@ -578,7 +642,11 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     const { limit } = query;
     const effectiveLimit = service.parseLimit(limit, 50, 2000);
 
-    return service.getDeviceStats(backendId, timeRange, effectiveLimit);
+    return await service.getDeviceStatsWithRouting(
+      backendId,
+      timeRange,
+      effectiveLimit,
+    );
   });
 
   // Get domains for a specific device
@@ -597,7 +665,12 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     const { sourceIP, limit } = query;
     const effectiveLimit = service.parseLimit(limit, 5000, 20000);
 
-    return service.getDeviceDomains(backendId, sourceIP || '', timeRange, effectiveLimit);
+    return await service.getDeviceDomainsWithRouting(
+      backendId,
+      sourceIP || '',
+      timeRange,
+      effectiveLimit,
+    );
   });
 
   // Get IPs for a specific device
@@ -616,7 +689,12 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     const { sourceIP, limit } = query;
     const effectiveLimit = service.parseLimit(limit, 5000, 20000);
 
-    return service.getDeviceIPs(backendId, sourceIP || '', timeRange, effectiveLimit);
+    return await service.getDeviceIPsWithRouting(
+      backendId,
+      sourceIP || '',
+      timeRange,
+      effectiveLimit,
+    );
   });
 
   // Get hourly statistics for a specific backend
@@ -635,7 +713,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     const query = request.query as Record<string, string | undefined>;
     const { hours = '24' } = query;
     const hoursNum = service.parseLimit(hours, 24, 24 * 30);
-    return service.getHourlyStats(backendId, timeRange, hoursNum);
+    return await service.getHourlyStatsWithRouting(backendId, timeRange, hoursNum);
   });
 
   // Get traffic trend for a specific backend
@@ -654,7 +732,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     const query = request.query as Record<string, string | undefined>;
     const { minutes = '30' } = query;
     const windowMinutes = service.parseLimit(minutes, 30, 60 * 24 * 7);
-    return service.getTrafficTrend(backendId, timeRange, windowMinutes);
+    return await service.getTrafficTrendWithRouting(backendId, timeRange, windowMinutes);
   });
 
   // Get traffic trend aggregated by time buckets for chart display
@@ -674,7 +752,12 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     const { minutes = '30', bucketMinutes = '1' } = query;
     const windowMinutes = service.parseLimit(minutes, 30, 60 * 24 * 7);
     const bucket = service.parseLimit(bucketMinutes, 1, 60);
-    return service.getTrafficTrendAggregated(backendId, timeRange, windowMinutes, bucket);
+    return await service.getTrafficTrendAggregatedWithRouting(
+      backendId,
+      timeRange,
+      windowMinutes,
+      bucket,
+    );
   });
 
   // Get recent connections for a specific backend
@@ -688,7 +771,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     const query = request.query as Record<string, string | undefined>;
     const { limit = '100' } = query;
     const limitNum = service.parseLimit(limit, 100, 2000);
-    return service.getRecentConnections(backendId, limitNum);
+    return service.getRecentConnectionsWithRouting(backendId, limitNum);
   });
 
 };

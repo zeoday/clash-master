@@ -6,6 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "migrate:sqlite-to-ch": "tsx src/scripts/migrate-sqlite-to-clickhouse.ts",
+    "verify:sqlite-vs-ch": "tsx src/scripts/verify-sqlite-clickhouse.ts",
     "lint": "eslint src/",
     "test": "vitest run",
     "test:watch": "vitest"

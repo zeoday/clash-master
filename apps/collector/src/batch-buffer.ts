@@ -6,6 +6,7 @@
  */
 import type { StatsDatabase } from "./db.js";
 import type { GeoIPService } from "./geo-service.js";
+import { getClickHouseWriter } from "./clickhouse-writer.js";
 
 export interface TrafficUpdate {
   domain: string;
@@ -96,6 +97,7 @@ export class BatchBuffer {
     backendId: number,
     logPrefix = "Collector",
   ): FlushResult {
+    const clickHouseWriter = getClickHouseWriter();
     const updates = Array.from(this.buffer.values());
     const geoResults = [...this.geoQueue];
 
@@ -118,6 +120,9 @@ export class BatchBuffer {
     if (updates.length > 0) {
       try {
         db.batchUpdateTrafficStats(backendId, updates);
+        if (clickHouseWriter.isEnabled()) {
+          clickHouseWriter.writeTrafficBatch(backendId, updates);
+        }
       } catch (err) {
         trafficOk = false;
         console.error(`[${logPrefix}:${backendId}] Batch write failed:`, err);
@@ -144,6 +149,9 @@ export class BatchBuffer {
             timestampMs: r.timestampMs,
           }));
         db.batchUpdateCountryStats(backendId, countryUpdates);
+        if (clickHouseWriter.isEnabled()) {
+          clickHouseWriter.writeCountryBatch(backendId, countryUpdates);
+        }
       } catch (err) {
         countryOk = false;
         console.error(

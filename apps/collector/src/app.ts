@@ -132,6 +132,46 @@ export async function createApp(options: AppOptions) {
     return buildGatewayHeaders(backend);
   };
 
+  const parseNonNegativeInt = (value: unknown): number | null => {
+    const parsed = Number.parseInt(String(value), 10);
+    if (!Number.isFinite(parsed) || parsed < 0) return null;
+    return parsed;
+  };
+
+  const loadRuleSetSizeByProvider = async (
+    gatewayBaseUrl: string,
+    headers: Record<string, string>,
+  ): Promise<Map<string, number>> => {
+    const map = new Map<string, number>();
+    try {
+      const res = await fetch(`${gatewayBaseUrl}/providers/rules`, {
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) {
+        return map;
+      }
+
+      const payload = (await res.json()) as {
+        providers?: Record<string, Record<string, unknown>>;
+      };
+      const providers = payload.providers || {};
+      for (const [name, data] of Object.entries(providers)) {
+        const ruleCount =
+          parseNonNegativeInt(data.ruleCount) ??
+          parseNonNegativeInt(data.rule_count) ??
+          parseNonNegativeInt(data.size) ??
+          parseNonNegativeInt(data.rules);
+        if (ruleCount !== null) {
+          map.set(name.toLowerCase(), ruleCount);
+        }
+      }
+    } catch {
+      // Best-effort enrichment only; ignore provider endpoint failures.
+    }
+    return map;
+  };
+
   const parseAgentToken = (request: { headers: Record<string, unknown> }): string => {
     const authHeader = request.headers.authorization;
     if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
@@ -756,7 +796,44 @@ export async function createApp(options: AppOptions) {
         if (!res.ok) {
           return reply.status(res.status).send({ error: `Gateway API error: ${res.status}` });
         }
-        return res.json();
+        const data = (await res.json()) as {
+          rules?: Array<Record<string, unknown>>;
+          [key: string]: unknown;
+        };
+
+        const rules = Array.isArray(data.rules) ? data.rules : [];
+        if (rules.length === 0) {
+          return data;
+        }
+
+        const providerSizeMap = await loadRuleSetSizeByProvider(gatewayBaseUrl, headers);
+        if (providerSizeMap.size === 0) {
+          return data;
+        }
+
+        const enrichedRules = rules.map((rule) => {
+          const type = String(rule.type || '');
+          const payload = String(rule.payload || '').toLowerCase();
+          const size = parseNonNegativeInt(rule.size);
+          if (type !== 'RuleSet' || size !== null || !payload) {
+            return rule;
+          }
+
+          const enrichedSize = providerSizeMap.get(payload);
+          if (enrichedSize === undefined) {
+            return rule;
+          }
+
+          return {
+            ...rule,
+            size: enrichedSize,
+          };
+        });
+
+        return {
+          ...data,
+          rules: enrichedRules,
+        };
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Failed to reach Gateway API';

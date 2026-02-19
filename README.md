@@ -590,6 +590,36 @@ COOKIE_SECRET=<至少32字节随机字符串>
 
 3. 重置密码后，再次停止容器，去除该参数并重启，恢复正常保护模式。
 
+### ClickHouse 迁移（Docker 用户）
+
+如果你准备从 SQLite 统计迁移到 ClickHouse（保留配置仍在 SQLite），推荐直接使用一键脚本：
+
+```bash
+./scripts/ch-migrate-docker.sh
+```
+
+脚本会自动执行：
+
+1. 启动 `clickhouse` profile 容器
+2. 迁移 SQLite 数据到 ClickHouse
+3. 对账验证（默认阈值 1%）
+
+常用参数：
+
+```bash
+# 不清空 CH 历史数据，做追加导入
+./scripts/ch-migrate-docker.sh --append
+
+# 指定时间窗口迁移
+./scripts/ch-migrate-docker.sh --from 2026-02-01T00:00:00Z --to 2026-02-20T00:00:00Z
+```
+
+迁移完成后，建议将 `STATS_QUERY_SOURCE=auto` 并重启：
+
+```bash
+docker compose up -d
+```
+
 ## ❓ 常见问题
 
 ### Q: 只映射 `3000:3000` 可以正常使用吗？

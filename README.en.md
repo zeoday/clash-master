@@ -598,6 +598,36 @@ If you forgot the token, temporarily set `FORCE_ACCESS_CONTROL_OFF=true` to ente
 
 3. Reset token, then remove this flag and restart normally.
 
+### ClickHouse Migration (Docker Users)
+
+If you want to migrate stats from SQLite to ClickHouse (while keeping control/config in SQLite), use the one-command helper:
+
+```bash
+./scripts/ch-migrate-docker.sh
+```
+
+The script automatically:
+
+1. Starts services with the `clickhouse` profile
+2. Migrates SQLite stats into ClickHouse
+3. Verifies SQLite vs ClickHouse consistency (default threshold: 1%)
+
+Common options:
+
+```bash
+# Append import without truncating CH tables
+./scripts/ch-migrate-docker.sh --append
+
+# Migrate a specific time window
+./scripts/ch-migrate-docker.sh --from 2026-02-01T00:00:00Z --to 2026-02-20T00:00:00Z
+```
+
+After migration, set `STATS_QUERY_SOURCE=auto` and restart:
+
+```bash
+docker compose up -d
+```
+
 ## ❓ FAQ
 
 ### Q: Can I run normally with only `3000:3000` exposed?

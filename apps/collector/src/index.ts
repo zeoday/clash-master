@@ -23,6 +23,13 @@ let wsServer: StatsWebSocketServer;
 
 import { APIServer } from './app.js';
 import { GeoIPService } from './geo-service.js';
+import {
+  ensureClickHouseReady,
+  ensureClickHouseSchema,
+  formatClickHouseConfigForLog,
+  loadClickHouseConfig,
+} from './clickhouse.js';
+import { ClickHouseCompareService } from './clickhouse-compare.js';
 
 const COLLECTOR_WS_PORT = parseInt(process.env.COLLECTOR_WS_PORT || '3002');
 const API_PORT = parseInt(process.env.API_PORT || '3001');
@@ -35,6 +42,7 @@ let db: StatsDatabase;
 let apiServer: APIServer;
 let geoService: GeoIPService;
 let policySyncService: SurgePolicySyncService;
+let clickHouseCompareService: ClickHouseCompareService;
 
 // Track last known backend configs to detect changes
 let lastBackendConfigs: Map<number, BackendConfig> = new Map();
@@ -42,9 +50,17 @@ let lastBackendConfigs: Map<number, BackendConfig> = new Map();
 async function main() {
   console.log('[Main] Starting collector service...');
 
+  const clickHouseConfig = loadClickHouseConfig();
+  console.info(`[Main] ClickHouse config: ${formatClickHouseConfigForLog(clickHouseConfig)}`);
+  await ensureClickHouseReady(clickHouseConfig);
+  await ensureClickHouseSchema(clickHouseConfig);
+
   // Initialize database
   console.log('[Main] Initializing database at:', DB_PATH);
   db = new StatsDatabase(DB_PATH);
+
+  clickHouseCompareService = new ClickHouseCompareService(db);
+  clickHouseCompareService.start();
 
   // Initialize GeoIP service
   geoService = new GeoIPService(db);
@@ -256,6 +272,7 @@ function shutdown() {
   // Stop servers
   wsServer?.stop();
   apiServer?.stop();
+  clickHouseCompareService?.stop();
   geoService?.destroy();
 
   // Close database

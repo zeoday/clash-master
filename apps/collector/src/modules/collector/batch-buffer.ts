@@ -4,10 +4,10 @@
  * Extracts the common BatchBuffer class, TrafficUpdate / GeoIPResult interfaces,
  * and toMinuteKey helper used by both collector.ts and surge-collector.ts.
  */
-import type { StatsDatabase } from "./db.js";
-import type { GeoIPService } from "./geo-service.js";
-import { getClickHouseWriter } from "./clickhouse-writer.js";
-import { shouldSkipSqliteStatsWrites } from "./stats-write-mode.js";
+import type { StatsDatabase } from "../db/db.js";
+import type { GeoIPService } from "../geo/geo.service.js";
+import { getClickHouseWriter } from "../clickhouse/clickhouse.writer.js";
+import { shouldSkipSqliteStatsWrites } from "../stats/stats-write-mode.js";
 
 export interface TrafficUpdate {
   domain: string;

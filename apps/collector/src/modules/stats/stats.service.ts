@@ -2,8 +2,8 @@
  * Stats Service - Business logic for statistics
  */
 
-import type { StatsDatabase } from '../../db.js';
-import type { RealtimeStore } from '../../realtime.js';
+import type { StatsDatabase } from '../db/db.js';
+import type { RealtimeStore } from '../realtime/realtime.store.js';
 import type {
   SummaryResponse,
   GlobalSummary,
@@ -19,7 +19,7 @@ import type {
   HourlyStats,
   DeviceStats,
 } from './stats.types.js';
-import { ClickHouseReader } from '../../clickhouse-reader.js';
+import { ClickHouseReader } from '../clickhouse/clickhouse.reader.js';
 
 interface PaginatedStatsOptions {
   offset?: number;

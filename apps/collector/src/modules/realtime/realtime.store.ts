@@ -1,19 +1,212 @@
-import {
-  SummaryDelta,
-  MinuteBucket,
-  DomainDelta,
-  IPDelta,
-  ProxyDelta,
-  DeviceDelta,
-  RuleDelta,
-  CountryDelta,
-  TrafficMeta,
-} from './realtime.types.js';
+import type {
+  CountryStats,
+  DeviceStats,
+  DomainStats,
+  IPStats,
+  ProxyStats,
+  RuleStats,
+  StatsSummary,
+  TrafficTrendPoint,
+} from '@neko-master/shared';
+
+type SummaryDelta = {
+  upload: number;
+  download: number;
+  connections: number;
+  lastUpdated: number;
+};
+
+type MinuteBucket = {
+  upload: number;
+  download: number;
+  lastUpdated: number;
+};
+
+type ProxyDelta = {
+  chain: string;
+  totalUpload: number;
+  totalDownload: number;
+  totalConnections: number;
+  lastSeen: string;
+};
+
+type DeviceDelta = {
+  sourceIP: string;
+  totalUpload: number;
+  totalDownload: number;
+  totalConnections: number;
+  lastSeen: string;
+};
+
+type RuleDelta = {
+  rule: string;
+  finalProxy: string;
+  totalUpload: number;
+  totalDownload: number;
+  totalConnections: number;
+  lastSeen: string;
+};
+
+type CountryDelta = {
+  country: string;
+  countryName: string;
+  continent: string;
+  totalUpload: number;
+  totalDownload: number;
+  totalConnections: number;
+  lastSeen: string;
+};
+
+type DomainDelta = {
+  domain: string;
+  totalUpload: number;
+  totalDownload: number;
+  totalConnections: number;
+  lastSeen: string;
+  ips: Set<string>;
+  rules: Set<string>;
+  chains: Set<string>;
+};
+
+type IPDelta = {
+  ip: string;
+  totalUpload: number;
+  totalDownload: number;
+  totalConnections: number;
+  lastSeen: string;
+  domains: Set<string>;
+  chains: Set<string>;
+  rules: Set<string>;
+};
+
+function matchesChainPrefix(fullChain: string, chain: string): boolean {
+  return fullChain === chain || fullChain.startsWith(`${chain} > `);
+}
+
+export type TrafficMeta = {
+  domain: string;
+  ip: string;
+  sourceIP?: string;
+  chains: string[];
+  rule: string;
+  rulePayload: string;
+  upload: number;
+  download: number;
+};
+
+type DomainPageOptions = {
+  offset?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: string;
+  search?: string;
+};
+
+type IPPageOptions = {
+  offset?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: string;
+  search?: string;
+};
+
+function toMinuteKey(tsMs: number): string {
+  const iso = new Date(tsMs).toISOString();
+  return `${iso.slice(0, 16)}:00`;
+}
+
+function bucketMinuteKey(minuteKey: string, bucketMinutes: number): string {
+  if (bucketMinutes <= 1) return minuteKey;
+  const minute = parseInt(minuteKey.slice(14, 16), 10);
+  const bucketMinute = Math.floor(minute / bucketMinutes) * bucketMinutes;
+  return `${minuteKey.slice(0, 14)}${String(bucketMinute).padStart(2, '0')}:00`;
+}
+
+function normalizeSortOrder(order?: string): 'asc' | 'desc' {
+  return order?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+}
+
+function compareString(a: string, b: string, order: 'asc' | 'desc'): number {
+  const delta = a.localeCompare(b);
+  return order === 'asc' ? delta : -delta;
+}
+
+function compareNumber(a: number, b: number, order: 'asc' | 'desc'): number {
+  const delta = a - b;
+  return order === 'asc' ? delta : -delta;
+}
+
+function compareTimestamp(a: string, b: string, order: 'asc' | 'desc'): number {
+  const aMs = Date.parse(a || '');
+  const bMs = Date.parse(b || '');
+  const safeA = Number.isFinite(aMs) ? aMs : 0;
+  const safeB = Number.isFinite(bMs) ? bMs : 0;
+  return compareNumber(safeA, safeB, order);
+}
+
+function matchesDomainSearch(domain: string, search: string): boolean {
+  if (!search) return true;
+  return domain.toLowerCase().includes(search);
+}
+
+function matchesIPSearch(ip: string, domains: Iterable<string>, search: string): boolean {
+  if (!search) return true;
+  if (ip.toLowerCase().includes(search)) return true;
+  for (const domain of domains) {
+    if (domain.toLowerCase().includes(search)) return true;
+  }
+  return false;
+}
+
+function sortDomains(data: DomainStats[], sortBy: string, sortOrder: 'asc' | 'desc'): DomainStats[] {
+  return data.sort((a, b) => {
+    switch (sortBy) {
+      case 'domain':
+        return compareString(a.domain, b.domain, sortOrder);
+      case 'totalTraffic':
+        return compareNumber(
+          a.totalDownload + a.totalUpload,
+          b.totalDownload + b.totalUpload,
+          sortOrder,
+        );
+      case 'totalUpload':
+        return compareNumber(a.totalUpload, b.totalUpload, sortOrder);
+      case 'totalConnections':
+        return compareNumber(a.totalConnections, b.totalConnections, sortOrder);
+      case 'lastSeen':
+        return compareTimestamp(a.lastSeen, b.lastSeen, sortOrder);
+      case 'totalDownload':
+      default:
+        return compareNumber(a.totalDownload, b.totalDownload, sortOrder);
+    }
+  });
+}
+
+function sortIPs(data: IPStats[], sortBy: string, sortOrder: 'asc' | 'desc'): IPStats[] {
+  return data.sort((a, b) => {
+    switch (sortBy) {
+      case 'ip':
+        return compareString(a.ip, b.ip, sortOrder);
+      case 'totalTraffic':
+        return compareNumber(
+          a.totalDownload + a.totalUpload,
+          b.totalDownload + b.totalUpload,
+          sortOrder,
+        );
+      case 'totalUpload':
+        return compareNumber(a.totalUpload, b.totalUpload, sortOrder);
+      case 'totalConnections':
+        return compareNumber(a.totalConnections, b.totalConnections, sortOrder);
+      case 'lastSeen':
+        return compareTimestamp(a.lastSeen, b.lastSeen, sortOrder);
+      case 'totalDownload':
+      default:
+        return compareNumber(a.totalDownload, b.totalDownload, sortOrder);
+    }
+  });
+}
 
 export class RealtimeStore {
-  // Expose these as public readonly or via getters if needed by the merger, 
-  // but for now we'll make them public to allow the merger to access them easily.
-  // In a stricter design, we might use getters.
   public summaryByBackend = new Map<number, SummaryDelta>();
   public minuteByBackend = new Map<number, Map<string, MinuteBucket>>();
   public domainByBackend = new Map<number, Map<string, DomainDelta>>();
@@ -25,30 +218,16 @@ export class RealtimeStore {
   public ruleByBackend = new Map<number, Map<string, RuleDelta>>();
   public ruleChainByBackend = new Map<number, Map<string, { rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number; lastSeen: string }>>();
   public countryByBackend = new Map<number, Map<string, CountryDelta>>();
-  
   private maxMinutes: number;
+
+  // Memory bounds: max entries per map before eviction of smallest-traffic entries
+  private static readonly MAX_DOMAIN_ENTRIES = 50_000;
+  private static readonly MAX_IP_ENTRIES = 50_000;
+  private static readonly MAX_RULE_CHAIN_ENTRIES = 50_000;
+  private static readonly MAX_DEVICE_DETAIL_ENTRIES = 10_000;
 
   constructor(maxMinutes = parseInt(process.env.REALTIME_MAX_MINUTES || '180', 10)) {
     this.maxMinutes = Number.isFinite(maxMinutes) ? Math.max(30, maxMinutes) : 180;
-  }
-
-  /**
-   * Helper to generate minute key "YYYY-MM-DDTHH:mm:00"
-   */
-  private toMinuteKey(tsMs: number): string {
-    const iso = new Date(tsMs).toISOString();
-    return `${iso.slice(0, 16)}:00`;
-  }
-
-  private pruneOldBuckets(minuteMap: Map<string, MinuteBucket>, nowMs: number) {
-    // Simple pruning strategy: remove keys older than maxMinutes
-    // This is less efficient than a rolling buffer but easier to implement with Map
-    const cutoff = new Date(nowMs - this.maxMinutes * 60 * 1000).toISOString().slice(0, 16) + ':00';
-    for (const key of minuteMap.keys()) {
-      if (key < cutoff) {
-        minuteMap.delete(key);
-      }
-    }
   }
 
   recordTraffic(
@@ -59,7 +238,6 @@ export class RealtimeStore {
   ): void {
     if (meta.upload <= 0 && meta.download <= 0) return;
 
-    // 1. Summary
     const summary = this.summaryByBackend.get(backendId) || {
       upload: 0,
       download: 0,
@@ -72,8 +250,7 @@ export class RealtimeStore {
     summary.lastUpdated = timestamp;
     this.summaryByBackend.set(backendId, summary);
 
-    // 2. Minute Bucket
-    const minuteKey = this.toMinuteKey(timestamp);
+    const minuteKey = toMinuteKey(timestamp);
     let minuteMap = this.minuteByBackend.get(backendId);
     if (!minuteMap) {
       minuteMap = new Map();
@@ -96,7 +273,6 @@ export class RealtimeStore {
     const fullChain = meta.chains.join(' > ');
     const lastSeen = new Date(timestamp).toISOString();
 
-    // 3. Domain
     if (meta.domain) {
       let domainMap = this.domainByBackend.get(backendId);
       if (!domainMap) {
@@ -125,7 +301,6 @@ export class RealtimeStore {
       domainMap.set(meta.domain, domainDelta);
     }
 
-    // 4. IP
     if (meta.ip) {
       let ipMap = this.ipByBackend.get(backendId);
       if (!ipMap) {
@@ -155,7 +330,6 @@ export class RealtimeStore {
       ipMap.set(meta.ip, ipDelta);
     }
 
-    // 5. Proxy
     const proxyChain = meta.chains[0] || 'DIRECT';
     let proxyMap = this.proxyByBackend.get(backendId);
     if (!proxyMap) {
@@ -177,7 +351,6 @@ export class RealtimeStore {
     proxyDelta.lastSeen = lastSeen;
     proxyMap.set(proxyChain, proxyDelta);
 
-    // 6. Device (Source IP)
     const sourceIP = (meta.sourceIP || '').trim();
     if (sourceIP) {
       let deviceMap = this.deviceByBackend.get(backendId);
@@ -199,7 +372,6 @@ export class RealtimeStore {
       deviceDelta.lastSeen = lastSeen;
       deviceMap.set(sourceIP, deviceDelta);
 
-      // Device -> Domain
       if (meta.domain) {
         let sourceDomainMap = this.deviceDomainByBackend.get(backendId);
         if (!sourceDomainMap) {
@@ -232,7 +404,6 @@ export class RealtimeStore {
         domainMap.set(meta.domain, domainDelta);
       }
 
-      // Device -> IP
       if (meta.ip) {
         let sourceIPMap = this.deviceIPByBackend.get(backendId);
         if (!sourceIPMap) {
@@ -266,7 +437,6 @@ export class RealtimeStore {
       }
     }
 
-    // 7. Rule
     let ruleMap = this.ruleByBackend.get(backendId);
     if (!ruleMap) {
       ruleMap = new Map();
@@ -289,7 +459,6 @@ export class RealtimeStore {
     ruleDelta.lastSeen = lastSeen;
     ruleMap.set(ruleName, ruleDelta);
 
-    // 8. Rule Chain
     if (ruleName && fullChain) {
       let ruleChainMap = this.ruleChainByBackend.get(backendId);
       if (!ruleChainMap) {
@@ -381,4 +550,852 @@ export class RealtimeStore {
 
     return { upload, download };
   }
+
+  applySummaryDelta<T extends { totalUpload: number; totalDownload: number; totalConnections: number }>(
+    backendId: number,
+    base: T,
+  ): T {
+    const delta = this.getSummaryDelta(backendId);
+    if (delta.upload === 0 && delta.download === 0 && delta.connections === 0) {
+      return base;
+    }
+
+    return {
+      ...base,
+      totalUpload: base.totalUpload + delta.upload,
+      totalDownload: base.totalDownload + delta.download,
+      totalConnections: base.totalConnections + delta.connections,
+    };
+  }
+
+  mergeTrend(
+    backendId: number,
+    basePoints: TrafficTrendPoint[],
+    minutes: number,
+    bucketMinutes = 1,
+    nowMs = Date.now(),
+  ): TrafficTrendPoint[] {
+    const minuteMap = this.minuteByBackend.get(backendId);
+    if (!minuteMap || minuteMap.size === 0) return basePoints;
+
+    const cutoffKey = toMinuteKey(nowMs - minutes * 60 * 1000);
+    const deltaMap = new Map<string, { upload: number; download: number }>();
+
+    for (const [minuteKey, bucket] of minuteMap) {
+      if (minuteKey < cutoffKey) continue;
+      const bucketKey = bucketMinuteKey(minuteKey, bucketMinutes);
+      const existing = deltaMap.get(bucketKey);
+      if (existing) {
+        existing.upload += bucket.upload;
+        existing.download += bucket.download;
+      } else {
+        deltaMap.set(bucketKey, { upload: bucket.upload, download: bucket.download });
+      }
+    }
+
+    if (deltaMap.size === 0) return basePoints;
+
+    const merged = new Map<string, { upload: number; download: number }>();
+    for (const point of basePoints) {
+      merged.set(point.time, { upload: point.upload, download: point.download });
+    }
+
+    for (const [time, delta] of deltaMap) {
+      const existing = merged.get(time);
+      if (existing) {
+        existing.upload += delta.upload;
+        existing.download += delta.download;
+      } else {
+        merged.set(time, { upload: delta.upload, download: delta.download });
+      }
+    }
+
+    return Array.from(merged.entries())
+      .map(([time, data]) => ({ time, upload: data.upload, download: data.download }))
+      .sort((a, b) => a.time.localeCompare(b.time));
+  }
+
+  mergeTopDomains(backendId: number, base: DomainStats[], limit: number): DomainStats[] {
+    const domainMap = this.domainByBackend.get(backendId);
+    if (!domainMap || domainMap.size === 0) return base;
+
+    const merged = new Map<string, DomainStats>();
+    for (const item of base) {
+      merged.set(item.domain, { ...item });
+    }
+
+    for (const [domain, delta] of domainMap) {
+      const existing = merged.get(domain);
+      if (existing) {
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (delta.lastSeen > existing.lastSeen) {
+          existing.lastSeen = delta.lastSeen;
+        }
+        if (delta.ips.size > 0) {
+          const ips = new Set(existing.ips || []);
+          for (const ip of delta.ips) ips.add(ip);
+          existing.ips = Array.from(ips);
+        }
+        if (delta.rules.size > 0) {
+          const rules = new Set(existing.rules || []);
+          for (const rule of delta.rules) rules.add(rule);
+          existing.rules = Array.from(rules);
+        }
+        if (delta.chains.size > 0) {
+          const chains = new Set(existing.chains || []);
+          for (const chain of delta.chains) chains.add(chain);
+          existing.chains = Array.from(chains);
+        }
+      } else {
+        merged.set(domain, {
+          domain,
+          totalUpload: delta.totalUpload,
+          totalDownload: delta.totalDownload,
+          totalConnections: delta.totalConnections,
+          lastSeen: delta.lastSeen,
+          ips: Array.from(delta.ips),
+          rules: Array.from(delta.rules),
+          chains: Array.from(delta.chains),
+        });
+      }
+    }
+
+    return Array.from(merged.values())
+      .sort((a, b) => (b.totalDownload + b.totalUpload) - (a.totalDownload + a.totalUpload))
+      .slice(0, limit);
+  }
+
+  mergeTopIPs(backendId: number, base: IPStats[], limit: number): IPStats[] {
+    const ipMap = this.ipByBackend.get(backendId);
+    if (!ipMap || ipMap.size === 0) return base;
+
+    const merged = new Map<string, IPStats>();
+    for (const item of base) {
+      merged.set(item.ip, { ...item });
+    }
+
+    for (const [ip, delta] of ipMap) {
+      const existing = merged.get(ip);
+      if (existing) {
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (delta.lastSeen > existing.lastSeen) {
+          existing.lastSeen = delta.lastSeen;
+        }
+        if (delta.domains.size > 0) {
+          const domains = new Set(existing.domains || []);
+          for (const domain of delta.domains) domains.add(domain);
+          existing.domains = Array.from(domains);
+        }
+        if (delta.chains.size > 0) {
+          const chains = new Set(existing.chains || []);
+          for (const chain of delta.chains) chains.add(chain);
+          existing.chains = Array.from(chains);
+        }
+      } else {
+        merged.set(ip, {
+          ip,
+          totalUpload: delta.totalUpload,
+          totalDownload: delta.totalDownload,
+          totalConnections: delta.totalConnections,
+          lastSeen: delta.lastSeen,
+          domains: Array.from(delta.domains),
+          chains: Array.from(delta.chains),
+        });
+      }
+    }
+
+    return Array.from(merged.values())
+      .sort((a, b) => (b.totalDownload + b.totalUpload) - (a.totalDownload + a.totalUpload))
+      .slice(0, limit);
+  }
+
+  mergeDomainStatsPaginated(
+    backendId: number,
+    base: { data: DomainStats[]; total: number },
+    opts: DomainPageOptions = {},
+  ): { data: DomainStats[]; total: number } {
+    const domainMap = this.domainByBackend.get(backendId);
+    if (!domainMap || domainMap.size === 0) return base;
+
+    const offset = Math.max(0, opts.offset ?? 0);
+    const limit = Math.max(1, (opts.limit ?? base.data.length) || 50);
+    const sortBy = opts.sortBy || 'totalDownload';
+    const sortOrder = normalizeSortOrder(opts.sortOrder);
+    const search = (opts.search || '').trim().toLowerCase();
+
+    const merged = new Map<string, DomainStats>();
+    for (const item of base.data) {
+      if (!matchesDomainSearch(item.domain, search)) continue;
+      merged.set(item.domain, { ...item });
+    }
+
+    let addedCount = 0;
+    for (const [domain, delta] of domainMap) {
+      if (!matchesDomainSearch(domain, search)) continue;
+
+      const existing = merged.get(domain);
+      if (existing) {
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (delta.lastSeen > existing.lastSeen) {
+          existing.lastSeen = delta.lastSeen;
+        }
+        const ips = new Set(existing.ips || []);
+        for (const ip of delta.ips) ips.add(ip);
+        existing.ips = Array.from(ips);
+        const rules = new Set(existing.rules || []);
+        for (const rule of delta.rules) rules.add(rule);
+        existing.rules = Array.from(rules);
+        const chains = new Set(existing.chains || []);
+        for (const chain of delta.chains) chains.add(chain);
+        existing.chains = Array.from(chains);
+        continue;
+      }
+
+      // For non-first pages, avoid injecting unknown new rows that can shift boundaries.
+      if (offset > 0) continue;
+      merged.set(domain, {
+        domain,
+        totalUpload: delta.totalUpload,
+        totalDownload: delta.totalDownload,
+        totalConnections: delta.totalConnections,
+        lastSeen: delta.lastSeen,
+        ips: Array.from(delta.ips),
+        rules: Array.from(delta.rules),
+        chains: Array.from(delta.chains),
+      });
+      addedCount += 1;
+    }
+
+    const sorted = sortDomains(Array.from(merged.values()), sortBy, sortOrder);
+    return {
+      data: sorted.slice(0, limit),
+      total: base.total + addedCount,
+    };
+  }
+
+  mergeIPStatsPaginated(
+    backendId: number,
+    base: { data: IPStats[]; total: number },
+    opts: IPPageOptions = {},
+  ): { data: IPStats[]; total: number } {
+    const ipMap = this.ipByBackend.get(backendId);
+    if (!ipMap || ipMap.size === 0) return base;
+
+    const offset = Math.max(0, opts.offset ?? 0);
+    const limit = Math.max(1, (opts.limit ?? base.data.length) || 50);
+    const sortBy = opts.sortBy || 'totalDownload';
+    const sortOrder = normalizeSortOrder(opts.sortOrder);
+    const search = (opts.search || '').trim().toLowerCase();
+
+    const merged = new Map<string, IPStats>();
+    for (const item of base.data) {
+      if (!matchesIPSearch(item.ip, item.domains || [], search)) continue;
+      merged.set(item.ip, { ...item });
+    }
+
+    let addedCount = 0;
+    for (const [ip, delta] of ipMap) {
+      if (!matchesIPSearch(ip, delta.domains, search)) continue;
+
+      const existing = merged.get(ip);
+      if (existing) {
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (delta.lastSeen > existing.lastSeen) {
+          existing.lastSeen = delta.lastSeen;
+        }
+        const domains = new Set(existing.domains || []);
+        for (const domain of delta.domains) domains.add(domain);
+        existing.domains = Array.from(domains);
+        const chains = new Set(existing.chains || []);
+        for (const chain of delta.chains) chains.add(chain);
+        existing.chains = Array.from(chains);
+        continue;
+      }
+
+      if (offset > 0) continue;
+      merged.set(ip, {
+        ip,
+        totalUpload: delta.totalUpload,
+        totalDownload: delta.totalDownload,
+        totalConnections: delta.totalConnections,
+        lastSeen: delta.lastSeen,
+        domains: Array.from(delta.domains),
+        chains: Array.from(delta.chains),
+      });
+      addedCount += 1;
+    }
+
+    const sorted = sortIPs(Array.from(merged.values()), sortBy, sortOrder);
+    return {
+      data: sorted.slice(0, limit),
+      total: base.total + addedCount,
+    };
+  }
+
+  mergeProxyDomains(
+    backendId: number,
+    chain: string,
+    base: DomainStats[],
+    limit = 5000,
+  ): DomainStats[] {
+    const domainMap = this.domainByBackend.get(backendId);
+    if (!domainMap || domainMap.size === 0) return base;
+
+    const merged = new Map<string, DomainStats>();
+    for (const item of base) {
+      merged.set(item.domain, { ...item });
+    }
+
+    for (const [domain, delta] of domainMap) {
+      const matched = Array.from(delta.chains).some((full) => matchesChainPrefix(full, chain));
+      if (!matched) continue;
+
+      const existing = merged.get(domain);
+      if (existing) {
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (delta.lastSeen > existing.lastSeen) {
+          existing.lastSeen = delta.lastSeen;
+        }
+        const ips = new Set(existing.ips || []);
+        for (const ip of delta.ips) ips.add(ip);
+        existing.ips = Array.from(ips);
+        const rules = new Set(existing.rules || []);
+        for (const rule of delta.rules) rules.add(rule);
+        existing.rules = Array.from(rules);
+        const chains = new Set(existing.chains || []);
+        for (const full of delta.chains) {
+          if (matchesChainPrefix(full, chain)) chains.add(full);
+        }
+        existing.chains = Array.from(chains);
+      } else {
+        merged.set(domain, {
+          domain,
+          totalUpload: delta.totalUpload,
+          totalDownload: delta.totalDownload,
+          totalConnections: delta.totalConnections,
+          lastSeen: delta.lastSeen,
+          ips: Array.from(delta.ips),
+          rules: Array.from(delta.rules),
+          chains: Array.from(delta.chains).filter((full) => matchesChainPrefix(full, chain)),
+        });
+      }
+    }
+
+    return Array.from(merged.values())
+      .sort((a, b) => (b.totalDownload + b.totalUpload) - (a.totalDownload + a.totalUpload))
+      .slice(0, limit);
+  }
+
+  mergeProxyIPs(
+    backendId: number,
+    chain: string,
+    base: IPStats[],
+    limit = 5000,
+  ): IPStats[] {
+    const ipMap = this.ipByBackend.get(backendId);
+    if (!ipMap || ipMap.size === 0) return base;
+
+    const merged = new Map<string, IPStats>();
+    for (const item of base) {
+      merged.set(item.ip, { ...item });
+    }
+
+    for (const [ip, delta] of ipMap) {
+      const matched = Array.from(delta.chains).some((full) => matchesChainPrefix(full, chain));
+      if (!matched) continue;
+
+      const existing = merged.get(ip);
+      if (existing) {
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (delta.lastSeen > existing.lastSeen) {
+          existing.lastSeen = delta.lastSeen;
+        }
+        const domains = new Set(existing.domains || []);
+        for (const domain of delta.domains) domains.add(domain);
+        existing.domains = Array.from(domains);
+        const chains = new Set(existing.chains || []);
+        for (const full of delta.chains) {
+          if (matchesChainPrefix(full, chain)) chains.add(full);
+        }
+        existing.chains = Array.from(chains);
+      } else {
+        merged.set(ip, {
+          ip,
+          totalUpload: delta.totalUpload,
+          totalDownload: delta.totalDownload,
+          totalConnections: delta.totalConnections,
+          lastSeen: delta.lastSeen,
+          domains: Array.from(delta.domains),
+          chains: Array.from(delta.chains).filter((full) => matchesChainPrefix(full, chain)),
+        });
+      }
+    }
+
+    return Array.from(merged.values())
+      .sort((a, b) => (b.totalDownload + b.totalUpload) - (a.totalDownload + a.totalUpload))
+      .slice(0, limit);
+  }
+
+  mergeProxyStats(backendId: number, base: ProxyStats[]): ProxyStats[] {
+    const proxyMap = this.proxyByBackend.get(backendId);
+    if (!proxyMap || proxyMap.size === 0) return base;
+
+    const merged = new Map<string, ProxyStats>();
+    for (const item of base) {
+      merged.set(item.chain, { ...item });
+    }
+
+    for (const [chain, delta] of proxyMap) {
+      const existing = merged.get(chain);
+      if (existing) {
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (delta.lastSeen > existing.lastSeen) {
+          existing.lastSeen = delta.lastSeen;
+        }
+      } else {
+        merged.set(chain, {
+          chain,
+          totalUpload: delta.totalUpload,
+          totalDownload: delta.totalDownload,
+          totalConnections: delta.totalConnections,
+          lastSeen: delta.lastSeen,
+        });
+      }
+    }
+
+    return Array.from(merged.values()).sort(
+      (a, b) => (b.totalDownload + b.totalUpload) - (a.totalDownload + a.totalUpload),
+    );
+  }
+
+  mergeDeviceStats(backendId: number, base: DeviceStats[], limit = 50): DeviceStats[] {
+    const deviceMap = this.deviceByBackend.get(backendId);
+    if (!deviceMap || deviceMap.size === 0) {
+      return base;
+    }
+
+    const merged = new Map<string, DeviceStats>();
+    for (const item of base) {
+      merged.set(item.sourceIP, { ...item });
+    }
+
+    for (const [sourceIP, delta] of deviceMap) {
+      const existing = merged.get(sourceIP);
+      if (existing) {
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (delta.lastSeen > existing.lastSeen) {
+          existing.lastSeen = delta.lastSeen;
+        }
+      } else {
+        merged.set(sourceIP, {
+          sourceIP,
+          totalUpload: delta.totalUpload,
+          totalDownload: delta.totalDownload,
+          totalConnections: delta.totalConnections,
+          lastSeen: delta.lastSeen,
+        });
+      }
+    }
+
+    return Array.from(merged.values())
+      .sort((a, b) => (b.totalDownload + b.totalUpload) - (a.totalDownload + a.totalUpload))
+      .slice(0, limit);
+  }
+
+  mergeDeviceDomains(
+    backendId: number,
+    sourceIP: string,
+    base: DomainStats[],
+    limit = 5000,
+  ): DomainStats[] {
+    const sourceDomainMap = this.deviceDomainByBackend.get(backendId);
+    const domainMap = sourceDomainMap?.get(sourceIP);
+    if (!domainMap || domainMap.size === 0) {
+      return base;
+    }
+
+    const merged = new Map<string, DomainStats>();
+    for (const item of base) {
+      merged.set(item.domain, { ...item });
+    }
+
+    for (const [domain, delta] of domainMap) {
+      const existing = merged.get(domain);
+      if (existing) {
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (delta.lastSeen > existing.lastSeen) {
+          existing.lastSeen = delta.lastSeen;
+        }
+        if (delta.ips.size > 0) {
+          const ips = new Set(existing.ips || []);
+          for (const ip of delta.ips) ips.add(ip);
+          existing.ips = Array.from(ips);
+        }
+        if (delta.rules.size > 0) {
+          const rules = new Set(existing.rules || []);
+          for (const rule of delta.rules) rules.add(rule);
+          existing.rules = Array.from(rules);
+        }
+        if (delta.chains.size > 0) {
+          const chains = new Set(existing.chains || []);
+          for (const chain of delta.chains) chains.add(chain);
+          existing.chains = Array.from(chains);
+        }
+      } else {
+        merged.set(domain, {
+          domain,
+          totalUpload: delta.totalUpload,
+          totalDownload: delta.totalDownload,
+          totalConnections: delta.totalConnections,
+          lastSeen: delta.lastSeen,
+          ips: Array.from(delta.ips),
+          rules: Array.from(delta.rules),
+          chains: Array.from(delta.chains),
+        });
+      }
+    }
+
+    return Array.from(merged.values())
+      .sort((a, b) => (b.totalDownload + b.totalUpload) - (a.totalDownload + a.totalUpload))
+      .slice(0, limit);
+  }
+
+  mergeDeviceIPs(
+    backendId: number,
+    sourceIP: string,
+    base: IPStats[],
+    limit = 5000,
+  ): IPStats[] {
+    const sourceIPMap = this.deviceIPByBackend.get(backendId);
+    const ipMap = sourceIPMap?.get(sourceIP);
+    if (!ipMap || ipMap.size === 0) {
+      return base;
+    }
+
+    const merged = new Map<string, IPStats>();
+    for (const item of base) {
+      merged.set(item.ip, { ...item });
+    }
+
+    for (const [ip, delta] of ipMap) {
+      const existing = merged.get(ip);
+      if (existing) {
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (delta.lastSeen > existing.lastSeen) {
+          existing.lastSeen = delta.lastSeen;
+        }
+        if (delta.domains.size > 0) {
+          const domains = new Set(existing.domains || []);
+          for (const domain of delta.domains) domains.add(domain);
+          existing.domains = Array.from(domains);
+        }
+        if (delta.chains.size > 0) {
+          const chains = new Set(existing.chains || []);
+          for (const chain of delta.chains) chains.add(chain);
+          existing.chains = Array.from(chains);
+        }
+      } else {
+        merged.set(ip, {
+          ip,
+          totalUpload: delta.totalUpload,
+          totalDownload: delta.totalDownload,
+          totalConnections: delta.totalConnections,
+          lastSeen: delta.lastSeen,
+          domains: Array.from(delta.domains),
+          chains: Array.from(delta.chains),
+        });
+      }
+    }
+
+    return Array.from(merged.values())
+      .sort((a, b) => (b.totalDownload + b.totalUpload) - (a.totalDownload + a.totalUpload))
+      .slice(0, limit);
+  }
+
+  mergeRuleStats(backendId: number, base: RuleStats[]): RuleStats[] {
+    const ruleMap = this.ruleByBackend.get(backendId);
+    if (!ruleMap || ruleMap.size === 0) return base;
+
+    const merged = new Map<string, RuleStats>();
+    for (const item of base) {
+      merged.set(item.rule, { ...item });
+    }
+
+    for (const [rule, delta] of ruleMap) {
+      const existing = merged.get(rule);
+      if (existing) {
+        existing.finalProxy = delta.finalProxy || existing.finalProxy;
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (delta.lastSeen > existing.lastSeen) {
+          existing.lastSeen = delta.lastSeen;
+        }
+      } else {
+        merged.set(rule, {
+          rule,
+          finalProxy: delta.finalProxy,
+          totalUpload: delta.totalUpload,
+          totalDownload: delta.totalDownload,
+          totalConnections: delta.totalConnections,
+          lastSeen: delta.lastSeen,
+        });
+      }
+    }
+
+    return Array.from(merged.values()).sort(
+      (a, b) => (b.totalDownload + b.totalUpload) - (a.totalDownload + a.totalUpload),
+    );
+  }
+
+  mergeRuleDomains(
+    backendId: number,
+    rule: string,
+    base: DomainStats[],
+    limit = 5000,
+  ): DomainStats[] {
+    const domainMap = this.domainByBackend.get(backendId);
+    if (!domainMap || domainMap.size === 0) return base;
+
+    const merged = new Map<string, DomainStats>();
+    for (const item of base) {
+      merged.set(item.domain, { ...item });
+    }
+
+    for (const [domain, delta] of domainMap) {
+      if (!delta.rules.has(rule)) continue;
+
+      const existing = merged.get(domain);
+      if (existing) {
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (delta.lastSeen > existing.lastSeen) {
+          existing.lastSeen = delta.lastSeen;
+        }
+        const ips = new Set(existing.ips || []);
+        for (const ip of delta.ips) ips.add(ip);
+        existing.ips = Array.from(ips);
+        const rules = new Set(existing.rules || []);
+        for (const r of delta.rules) rules.add(r);
+        existing.rules = Array.from(rules);
+        const chains = new Set(existing.chains || []);
+        for (const full of delta.chains) chains.add(full);
+        existing.chains = Array.from(chains);
+      } else {
+        merged.set(domain, {
+          domain,
+          totalUpload: delta.totalUpload,
+          totalDownload: delta.totalDownload,
+          totalConnections: delta.totalConnections,
+          lastSeen: delta.lastSeen,
+          ips: Array.from(delta.ips),
+          rules: Array.from(delta.rules),
+          chains: Array.from(delta.chains),
+        });
+      }
+    }
+
+    return Array.from(merged.values())
+      .sort((a, b) => (b.totalDownload + b.totalUpload) - (a.totalDownload + a.totalUpload))
+      .slice(0, limit);
+  }
+
+  mergeRuleIPs(
+    backendId: number,
+    rule: string,
+    base: IPStats[],
+    limit = 5000,
+  ): IPStats[] {
+    const ipMap = this.ipByBackend.get(backendId);
+    if (!ipMap || ipMap.size === 0) return base;
+
+    const merged = new Map<string, IPStats>();
+    for (const item of base) {
+      merged.set(item.ip, { ...item });
+    }
+
+    for (const [ip, delta] of ipMap) {
+      if (!delta.rules.has(rule)) continue;
+
+      const existing = merged.get(ip);
+      if (existing) {
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (delta.lastSeen > existing.lastSeen) {
+          existing.lastSeen = delta.lastSeen;
+        }
+        const domains = new Set(existing.domains || []);
+        for (const domain of delta.domains) domains.add(domain);
+        existing.domains = Array.from(domains);
+        const chains = new Set(existing.chains || []);
+        for (const full of delta.chains) chains.add(full);
+        existing.chains = Array.from(chains);
+      } else {
+        merged.set(ip, {
+          ip,
+          totalUpload: delta.totalUpload,
+          totalDownload: delta.totalDownload,
+          totalConnections: delta.totalConnections,
+          lastSeen: delta.lastSeen,
+          domains: Array.from(delta.domains),
+          chains: Array.from(delta.chains),
+        });
+      }
+    }
+
+    return Array.from(merged.values())
+      .sort((a, b) => (b.totalDownload + b.totalUpload) - (a.totalDownload + a.totalUpload))
+      .slice(0, limit);
+  }
+
+  mergeCountryStats(backendId: number, base: CountryStats[]): CountryStats[] {
+    const countryMap = this.countryByBackend.get(backendId);
+    if (!countryMap || countryMap.size === 0) return base;
+
+    const merged = new Map<string, CountryStats>();
+    for (const item of base) {
+      merged.set(item.country, { ...item });
+    }
+
+    for (const [country, delta] of countryMap) {
+      const existing = merged.get(country);
+      if (existing) {
+        existing.totalUpload += delta.totalUpload;
+        existing.totalDownload += delta.totalDownload;
+        existing.totalConnections += delta.totalConnections;
+        if (!existing.countryName && delta.countryName) {
+          existing.countryName = delta.countryName;
+        }
+        if (!existing.continent && delta.continent) {
+          existing.continent = delta.continent;
+        }
+        if (delta.lastSeen && (!existing.lastSeen || delta.lastSeen > existing.lastSeen)) {
+          existing.lastSeen = delta.lastSeen;
+        }
+      } else {
+        merged.set(country, {
+          country,
+          countryName: delta.countryName,
+          continent: delta.continent,
+          totalUpload: delta.totalUpload,
+          totalDownload: delta.totalDownload,
+          totalConnections: delta.totalConnections,
+          lastSeen: delta.lastSeen,
+        });
+      }
+    }
+
+    return Array.from(merged.values()).sort(
+      (a, b) => (b.totalDownload + b.totalUpload) - (a.totalDownload + a.totalUpload),
+    );
+  }
+
+  clearTraffic(backendId: number): void {
+    this.summaryByBackend.delete(backendId);
+    this.minuteByBackend.delete(backendId);
+    this.domainByBackend.delete(backendId);
+    this.ipByBackend.delete(backendId);
+    this.proxyByBackend.delete(backendId);
+    this.deviceByBackend.delete(backendId);
+    this.deviceDomainByBackend.delete(backendId);
+    this.deviceIPByBackend.delete(backendId);
+    this.ruleByBackend.delete(backendId);
+    this.ruleChainByBackend.delete(backendId);
+  }
+
+  clearCountries(backendId: number): void {
+    this.countryByBackend.delete(backendId);
+  }
+
+  clearBackend(backendId: number): void {
+    this.clearTraffic(backendId);
+    this.clearCountries(backendId);
+  }
+
+  private pruneOldBuckets(minuteMap: Map<string, MinuteBucket>, nowMs: number): void {
+    const cutoffKey = toMinuteKey(nowMs - this.maxMinutes * 60 * 1000);
+    for (const key of minuteMap.keys()) {
+      if (key < cutoffKey) {
+        minuteMap.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Evict lowest-traffic entries when a map exceeds its size cap.
+   * Removes the bottom ~25% by total traffic to avoid frequent evictions.
+   */
+  private evictIfNeeded<T extends { totalUpload: number; totalDownload: number }>(
+    map: Map<string, T>,
+    maxEntries: number,
+  ): void {
+    if (map.size <= maxEntries) return;
+
+    const entries = Array.from(map.entries());
+    entries.sort((a, b) =>
+      (a[1].totalUpload + a[1].totalDownload) - (b[1].totalUpload + b[1].totalDownload)
+    );
+
+    // Remove bottom 25%
+    const removeCount = Math.ceil(entries.length * 0.25);
+    for (let i = 0; i < removeCount; i++) {
+      map.delete(entries[i][0]);
+    }
+  }
+
+  /**
+   * Run periodic memory bounds check on all realtime maps.
+   * Called after recordTraffic accumulates data.
+   */
+  pruneIfNeeded(backendId: number): void {
+    const domainMap = this.domainByBackend.get(backendId);
+    if (domainMap) this.evictIfNeeded(domainMap, RealtimeStore.MAX_DOMAIN_ENTRIES);
+
+    const ipMap = this.ipByBackend.get(backendId);
+    if (ipMap) this.evictIfNeeded(ipMap, RealtimeStore.MAX_IP_ENTRIES);
+
+    const ruleChainMap = this.ruleChainByBackend.get(backendId);
+    if (ruleChainMap) {
+      this.evictIfNeeded(ruleChainMap, RealtimeStore.MAX_RULE_CHAIN_ENTRIES);
+    }
+
+    // Device detail maps (per source IP × domain/IP) can be deeply nested
+    const deviceDomainMap = this.deviceDomainByBackend.get(backendId);
+    if (deviceDomainMap) {
+      for (const [, subMap] of deviceDomainMap) {
+        this.evictIfNeeded(subMap, RealtimeStore.MAX_DEVICE_DETAIL_ENTRIES);
+      }
+    }
+
+    const deviceIPMap = this.deviceIPByBackend.get(backendId);
+    if (deviceIPMap) {
+      for (const [, subMap] of deviceIPMap) {
+        this.evictIfNeeded(subMap, RealtimeStore.MAX_DEVICE_DETAIL_ENTRIES);
+      }
+    }
+  }
 }
+
+export const realtimeStore = new RealtimeStore();

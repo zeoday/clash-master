@@ -8,19 +8,19 @@ import crypto from 'crypto';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
-import type { StatsDatabase } from './db.js';
-import type { RealtimeStore } from './realtime.js';
+import type { StatsDatabase } from '../db/db.js';
+import type { RealtimeStore } from '../realtime/realtime.store.js';
 import { buildGatewayHeaders, getGatewayBaseUrl, isAgentBackendUrl, parseSurgeRule } from '@neko-master/shared';
-import type { TrafficUpdate } from './db.js';
-import { SurgePolicySyncService } from './modules/surge/surge-policy-sync.js';
-import { getClickHouseWriter } from './clickhouse-writer.js';
-import { shouldSkipSqliteStatsWrites } from './stats-write-mode.js';
+import type { TrafficUpdate } from '../db/db.js';
+import { SurgePolicySyncService } from '../surge/surge-policy-sync.js';
+import { getClickHouseWriter } from '../clickhouse/clickhouse.writer.js';
+import { shouldSkipSqliteStatsWrites } from '../stats/stats-write-mode.js';
 
 // Import modules
-import { BackendService, backendController } from './modules/backend/index.js';
-import { StatsService, statsController } from './modules/stats/index.js';
-import { AuthService, authController } from './modules/auth/index.js';
-import { configController } from './modules/config/index.js';
+import { BackendService, backendController } from '../backend/index.js';
+import { StatsService, statsController } from '../stats/index.js';
+import { AuthService, authController } from '../auth/index.js';
+import { configController } from '../config/index.js';
 
 // Extend Fastify instance to include services
 declare module 'fastify' {

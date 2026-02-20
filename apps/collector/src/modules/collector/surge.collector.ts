@@ -1,9 +1,9 @@
 import { isIPv4, isIPv6 } from "net";
-import type { StatsDatabase } from "./db.js";
-import { GeoIPService } from "./geo-service.js";
-import { realtimeStore } from "./realtime.js";
+import type { StatsDatabase } from "../db/db.js";
+import { GeoIPService } from "../geo/geo.service.js";
+import { realtimeStore } from "../realtime/realtime.store.js";
 import type { SurgeRequest, SurgeRequestsData } from "@neko-master/shared";
-import { calculateBackoffDelay } from "./utils.js";
+import { calculateBackoffDelay } from "../../shared/utils/backoff.js";
 import { BatchBuffer } from "./batch-buffer.js";
 
 // Debug configuration
@@ -11,7 +11,7 @@ const DEBUG_SURGE = process.env.DEBUG_SURGE === "true";
 const STALE_CONNECTION_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 const CLEANUP_INTERVAL = 2 * 60 * 1000; // 2 minutes
 
-interface SurgeCollectorOptions {
+export interface SurgeCollectorOptions {
   url: string;
   token?: string;
   pollInterval?: number;

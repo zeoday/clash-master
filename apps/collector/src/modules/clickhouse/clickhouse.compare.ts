@@ -1,5 +1,5 @@
-import type { StatsDatabase } from './db.js';
-import { loadClickHouseConfig } from './clickhouse.js';
+import type { StatsDatabase } from '../db/db.js';
+import { loadClickHouseConfig } from './clickhouse.config.js';
 
 export class ClickHouseCompareService {
   private readonly config = loadClickHouseConfig();

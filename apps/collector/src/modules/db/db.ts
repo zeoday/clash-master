@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { normalizeGeoIP, type Connection, type DomainStats, type IPStats, type HourlyStats, type ProxyStats, type RuleStats, type ProxyTrafficStats, type DeviceStats } from '@neko-master/shared';
-import { getAllSchemaStatements } from './database/schema.js';
+import { getAllSchemaStatements } from '../../database/schema.js';
 import {
   AuthRepository,
   SurgeRepository,
@@ -18,7 +18,7 @@ import {
   TrafficWriterRepository,
   DomainRepository,
   BackendRepository,
-} from './database/repositories/index.js';
+} from '../../database/repositories/index.js';
 
 export interface TrafficUpdate {
   domain: string;

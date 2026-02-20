@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestBackend, createTestDatabase } from "./__tests__/helpers.js";
+import { createTestBackend, createTestDatabase } from "../../__tests__/helpers.js";
 import type { StatsDatabase } from "./db.js";
 import type { IPStats } from "@neko-master/shared";
 

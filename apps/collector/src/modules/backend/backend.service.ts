@@ -3,8 +3,8 @@
  * Includes automatic health checking for upstream gateways
  */
 
-import type { StatsDatabase } from '../../db.js';
-import type { RealtimeStore } from '../../realtime.js';
+import type { StatsDatabase } from '../db/db.js';
+import type { RealtimeStore } from '../realtime/realtime.store.js';
 import { randomBytes } from 'node:crypto';
 import type {
   BackendConfig,
@@ -18,8 +18,8 @@ import type {
   RotateAgentTokenResult,
 } from './backend.types.js';
 import { isAgentBackendUrl } from '@neko-master/shared';
-import { loadClickHouseConfig, runClickHouseQuery } from '../../clickhouse.js';
-import type { ClickHouseConfig } from '../../clickhouse.js';
+import { loadClickHouseConfig, runClickHouseQuery } from '../clickhouse/clickhouse.config.js';
+import type { ClickHouseConfig } from '../clickhouse/clickhouse.config.js';
 
 import type { AuthService } from '../auth/auth.service.js';
 

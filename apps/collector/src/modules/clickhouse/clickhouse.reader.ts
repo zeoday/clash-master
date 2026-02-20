@@ -5,7 +5,7 @@ import type {
   ProxyStats,
   RuleStats,
 } from '@neko-master/shared';
-import { loadClickHouseConfig } from './clickhouse.js';
+import { loadClickHouseConfig } from './clickhouse.config.js';
 
 type StatsQuerySource = 'sqlite' | 'clickhouse' | 'auto';
 

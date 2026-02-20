@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDatabase, createTestBackend } from '../../__tests__/helpers.js';
-import type { StatsDatabase } from '../../db.js';
+import type { StatsDatabase } from '../../modules/db/db.js';
 
 describe('TrafficWriterRepository', () => {
   let db: StatsDatabase;

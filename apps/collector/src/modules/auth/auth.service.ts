@@ -5,7 +5,7 @@
  * Uses SHA-256 hashing for token storage (not encryption, but one-way hash).
  */
 
-import type { StatsDatabase } from '../../db.js';
+import type { StatsDatabase } from '../db/db.js';
 import type { AuthConfig, AuthVerifyResult, AuthState } from './auth.types.js';
 
 // Simple hash function for token storage

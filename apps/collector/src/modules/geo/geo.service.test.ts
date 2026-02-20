@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createApp } from "./app.js";
-import { realtimeStore } from "./realtime.js";
-import { createTestBackend, createTestDatabase } from "./__tests__/helpers.js";
-import type { StatsDatabase } from "./db.js";
+import { createApp } from "../app/app.js";
+import { realtimeStore } from "../realtime/realtime.store.js";
+import { createTestBackend, createTestDatabase } from "../../__tests__/helpers.js";
+import type { StatsDatabase } from "../db/db.js";
 import type { FastifyInstance } from "fastify";
 
 describe("GeoIP config API", () => {

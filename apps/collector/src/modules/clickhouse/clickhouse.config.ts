@@ -1,4 +1,4 @@
-type ClickHouseProtocol = 'http' | 'https';
+export type ClickHouseProtocol = 'http' | 'https';
 
 export interface ClickHouseConfig {
   enabled: boolean;
@@ -47,7 +47,7 @@ function maskSecret(secret: string): string {
   return `${secret.slice(0, 2)}****${secret.slice(-2)}`;
 }
 
-function buildBaseUrl(config: ClickHouseConfig): string {
+export function buildBaseUrl(config: ClickHouseConfig): string {
   return `${config.protocol}://${config.host}:${config.port}`;
 }
 
@@ -131,7 +131,7 @@ export async function runClickHouseTextQuery(
   return await response.text();
 }
 
-async function runClickHouseQueryWithResponse(
+export async function runClickHouseQueryWithResponse(
   config: ClickHouseConfig,
   query: string,
 ): Promise<Response> {

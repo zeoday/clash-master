@@ -1,15 +1,15 @@
 import WebSocket from "ws";
 import type { ConnectionsData } from "@neko-master/shared";
-import { StatsDatabase } from "./db.js";
-import { GeoIPService } from "./geo-service.js";
-import { realtimeStore } from "./realtime.js";
+import { StatsDatabase } from "../db/db.js";
+import { GeoIPService } from "../geo/geo.service.js";
+import { realtimeStore } from "../realtime/realtime.store.js";
 import { BatchBuffer } from "./batch-buffer.js";
 
 // Stale connection cleanup constants
 const STALE_CONNECTION_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 const CLEANUP_INTERVAL = 2 * 60 * 1000; // 2 minutes
 
-interface CollectorOptions {
+export interface CollectorOptions {
   url: string;
   token?: string;
   reconnectInterval?: number;

@@ -5,7 +5,7 @@
  * Caches policy data in database to avoid frequent API calls.
  */
 
-import type { StatsDatabase } from '../../db.js';
+import type { StatsDatabase } from '../db/db.js';
 
 interface SurgePolicyDetail {
   policyGroup: string;

@@ -6,8 +6,8 @@ import maxmind, {
   type CountryResponse,
   type Reader,
 } from "maxmind";
-import type { StatsDatabase } from "./db.js";
-import { ConfigRepository, type GeoLookupConfig } from "./database/repositories/config.repository.js";
+import type { StatsDatabase } from "../db/db.js";
+import { ConfigRepository, type GeoLookupConfig } from "../../database/repositories/config.repository.js";
 
 export interface GeoLocation {
   country: string;

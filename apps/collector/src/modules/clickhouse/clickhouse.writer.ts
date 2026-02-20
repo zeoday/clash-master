@@ -1,5 +1,5 @@
-import type { TrafficUpdate } from './batch-buffer.js';
-import { loadClickHouseConfig } from './clickhouse.js';
+import type { TrafficUpdate } from '../collector/batch-buffer.js';
+import { loadClickHouseConfig } from './clickhouse.config.js';
 
 interface CountryMinuteUpdate {
   country: string;
@@ -10,7 +10,7 @@ interface CountryMinuteUpdate {
   timestampMs?: number;
 }
 
-class ClickHouseWriter {
+export class ClickHouseWriter {
   private readonly config = loadClickHouseConfig();
   private readonly writeEnabled =
     this.config.enabled && process.env.CH_WRITE_ENABLED === '1';

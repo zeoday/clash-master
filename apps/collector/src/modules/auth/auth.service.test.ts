@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDatabase, createTestBackend } from '../../__tests__/helpers.js';
 import { AuthService } from './auth.service.js';
-import type { StatsDatabase } from '../../db.js';
+import type { StatsDatabase } from '../db/db.js';
 
 describe('AuthService', () => {
   let db: StatsDatabase;

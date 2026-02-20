@@ -12,25 +12,25 @@ if (fs.existsSync(envLocalPath)) {
 // Load .env (defaults)
 config();
 
-import { StatsDatabase, BackendConfig } from './db.js';
-import { createCollector, GatewayCollector } from './collector.js';
-import { createSurgeCollector, SurgeCollector } from './surge-collector.js';
-import { StatsWebSocketServer } from './websocket.js';
-import { realtimeStore } from './realtime.js';
+import { StatsDatabase, BackendConfig } from './modules/db/db.js';
+import { createCollector, GatewayCollector } from './modules/collector/gateway.collector.js';
+import { createSurgeCollector, SurgeCollector } from './modules/collector/surge.collector.js';
+import { StatsWebSocketServer } from './modules/websocket/websocket.server.js';
+import { realtimeStore } from './modules/realtime/realtime.store.js';
 import { SurgePolicySyncService } from './modules/surge/surge-policy-sync.js';
 
 let wsServer: StatsWebSocketServer;
 
-import { APIServer } from './app.js';
-import { GeoIPService } from './geo-service.js';
+import { APIServer } from './modules/app/app.js';
+import { GeoIPService } from './modules/geo/geo.service.js';
 import { StatsService } from './modules/stats/index.js';
 import {
   ensureClickHouseReady,
   ensureClickHouseSchema,
   formatClickHouseConfigForLog,
   loadClickHouseConfig,
-} from './clickhouse.js';
-import { ClickHouseCompareService } from './clickhouse-compare.js';
+} from './modules/clickhouse/clickhouse.config.js';
+import { ClickHouseCompareService } from './modules/clickhouse/clickhouse.compare.js';
 
 const COLLECTOR_WS_PORT = parseInt(process.env.COLLECTOR_WS_PORT || '3002');
 const API_PORT = parseInt(process.env.API_PORT || '3001');

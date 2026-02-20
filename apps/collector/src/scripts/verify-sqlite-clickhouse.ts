@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { ensureClickHouseReady, loadClickHouseConfig } from '../clickhouse.js';
+import { ensureClickHouseReady, loadClickHouseConfig } from '../modules/clickhouse/clickhouse.config.js';
 
 type CliOptions = {
   sqlitePath: string;

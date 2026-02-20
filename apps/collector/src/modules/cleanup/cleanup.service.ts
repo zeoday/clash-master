@@ -1,5 +1,5 @@
-import { StatsDatabase } from './db.js';
-import { RetentionConfig, DEFAULT_RETENTION } from './data-retention.js';
+import { StatsDatabase } from '../db/db.js';
+import { RetentionConfig, DEFAULT_RETENTION } from './cleanup.types.js';
 
 /**
  * Automatic data cleanup service

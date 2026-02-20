@@ -4,7 +4,7 @@ import {
   ensureClickHouseSchema,
   loadClickHouseConfig,
   runClickHouseQuery,
-} from '../clickhouse.js';
+} from '../modules/clickhouse/clickhouse.config.js';
 
 type CliOptions = {
   sqlitePath: string;

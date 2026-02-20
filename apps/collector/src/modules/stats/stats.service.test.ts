@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDatabase, createTestBackend } from '../../__tests__/helpers.js';
 import { StatsService } from './stats.service.js';
-import { realtimeStore } from '../../realtime.js';
-import type { StatsDatabase } from '../../db.js';
+import { realtimeStore } from '../realtime/realtime.store.js';
+import type { StatsDatabase } from '../db/db.js';
 
 describe('StatsService', () => {
   let db: StatsDatabase;

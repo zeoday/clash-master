@@ -1,8 +1,8 @@
 import { WebSocketServer as WSServer, WebSocket } from 'ws';
 import type { StatsSummary, DomainStats, IPStats, ProxyStats, CountryStats, DeviceStats, RuleStats, HourlyStats } from '@neko-master/shared';
-import type { StatsDatabase } from './db.js';
-import type { StatsService } from './modules/stats/stats.service.js';
-import { AuthService } from './modules/auth/auth.service.js';
+import type { StatsDatabase } from '../db/db.js';
+import type { StatsService } from '../stats/stats.service.js';
+import { AuthService } from '../auth/auth.service.js';
 import { IncomingMessage } from 'http';
 import { URL } from 'url';
 

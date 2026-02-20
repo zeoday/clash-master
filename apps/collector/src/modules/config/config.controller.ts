@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
-import type { StatsDatabase, GeoLookupConfig, GeoLookupProvider } from "../../db.js";
-import type { RealtimeStore } from "../../realtime.js";
-import { loadClickHouseConfig, runClickHouseQuery, runClickHouseTextQuery } from "../../clickhouse.js";
+import type { StatsDatabase, GeoLookupConfig, GeoLookupProvider } from "../db/db.js";
+import type { RealtimeStore } from "../realtime/realtime.store.js";
+import { loadClickHouseConfig, runClickHouseQuery, runClickHouseTextQuery } from "../clickhouse/clickhouse.config.js";
 
 declare module "fastify" {
   interface FastifyInstance {

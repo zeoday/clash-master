@@ -16,7 +16,7 @@ export interface BackendConfig {
 }
 
 // Re-export from db.ts for compatibility
-export type { BackendConfig as BackendConfigFromDb } from '../../db.js';
+export type { BackendConfig as BackendConfigFromDb } from '../db/db.js';
 
 export interface CreateBackendInput {
   name: string;

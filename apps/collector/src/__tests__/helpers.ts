@@ -1,4 +1,4 @@
-import { StatsDatabase } from '../db.js';
+import { StatsDatabase } from '../modules/db/db.js';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';

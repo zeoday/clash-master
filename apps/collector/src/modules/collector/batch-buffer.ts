@@ -6,7 +6,10 @@
  */
 import type { StatsDatabase } from "../db/db.js";
 import type { GeoIPService } from "../geo/geo.service.js";
-import { getClickHouseWriter } from "../clickhouse/clickhouse.writer.js";
+import {
+  getClickHouseWriter,
+  type TrafficWriteOutcome,
+} from "../clickhouse/clickhouse.writer.js";
 import { shouldSkipSqliteStatsWrites } from "../stats/stats-write-mode.js";
 
 export interface TrafficUpdate {
@@ -44,7 +47,13 @@ export interface FlushResult {
   rules: number;
   trafficOk: boolean;
   countryOk: boolean;
+  hasTrafficUpdates: boolean;
+  hasCountryUpdates: boolean;
   hasUpdates: boolean;
+  /** Pending traffic write, including detail+agg table status */
+  pendingTrafficWrite?: Promise<TrafficWriteOutcome>;
+  /** Pending country write */
+  pendingCountryWrite?: Promise<void>;
 }
 
 export class BatchBuffer {
@@ -120,15 +129,22 @@ export class BatchBuffer {
 
     let trafficOk = true;
     let countryOk = true;
+    const hasTrafficUpdates = updates.length > 0;
+    let hasCountryUpdates = false;
+    let pendingTrafficWrite: Promise<TrafficWriteOutcome> | undefined;
+    let pendingCountryWrite: Promise<void> | undefined;
 
-    if (updates.length > 0) {
+    if (hasTrafficUpdates) {
       try {
         const reduceSQLiteWrites = clickHouseWriter.isEnabled() && process.env.CH_DISABLE_SQLITE_REDUCTION !== '1';
         if (!skipSqliteStatsWrites) {
           db.batchUpdateTrafficStats(backendId, updates, reduceSQLiteWrites);
         }
         if (clickHouseWriter.isEnabled()) {
-          clickHouseWriter.writeTrafficBatch(backendId, updates);
+          pendingTrafficWrite = clickHouseWriter.writeTrafficBatch(
+            backendId,
+            updates,
+          );
         }
       } catch (err) {
         trafficOk = false;
@@ -155,11 +171,17 @@ export class BatchBuffer {
             download: r.download,
             timestampMs: r.timestampMs,
           }));
-        if (!skipSqliteStatsWrites) {
-          db.batchUpdateCountryStats(backendId, countryUpdates);
-        }
-        if (clickHouseWriter.isEnabled()) {
-          clickHouseWriter.writeCountryBatch(backendId, countryUpdates);
+        hasCountryUpdates = countryUpdates.length > 0;
+        if (hasCountryUpdates) {
+          if (!skipSqliteStatsWrites) {
+            db.batchUpdateCountryStats(backendId, countryUpdates);
+          }
+          if (clickHouseWriter.isEnabled()) {
+            pendingCountryWrite = clickHouseWriter.writeCountryBatch(
+              backendId,
+              countryUpdates,
+            );
+          }
         }
       } catch (err) {
         countryOk = false;
@@ -179,7 +201,11 @@ export class BatchBuffer {
       rules: rules.size,
       trafficOk,
       countryOk,
-      hasUpdates: updates.length > 0 || geoResults.length > 0,
+      hasTrafficUpdates,
+      hasCountryUpdates,
+      hasUpdates: hasTrafficUpdates || hasCountryUpdates,
+      pendingTrafficWrite,
+      pendingCountryWrite,
     };
   }
 

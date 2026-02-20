@@ -1312,9 +1312,12 @@ export class RealtimeStore {
     );
   }
 
-  clearTraffic(backendId: number): void {
+  clearTrafficSummary(backendId: number): void {
     this.summaryByBackend.delete(backendId);
     this.minuteByBackend.delete(backendId);
+  }
+
+  clearTrafficDimensions(backendId: number): void {
     this.domainByBackend.delete(backendId);
     this.ipByBackend.delete(backendId);
     this.proxyByBackend.delete(backendId);
@@ -1323,6 +1326,11 @@ export class RealtimeStore {
     this.deviceIPByBackend.delete(backendId);
     this.ruleByBackend.delete(backendId);
     this.ruleChainByBackend.delete(backendId);
+  }
+
+  clearTraffic(backendId: number): void {
+    this.clearTrafficSummary(backendId);
+    this.clearTrafficDimensions(backendId);
   }
 
   clearCountries(backendId: number): void {

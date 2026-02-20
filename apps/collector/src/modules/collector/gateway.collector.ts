@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import type { ConnectionsData } from "@neko-master/shared";
 import { StatsDatabase } from "../db/db.js";
 import { GeoIPService } from "../geo/geo.service.js";
+import { TrafficWriteError } from "../clickhouse/clickhouse.writer.js";
 import { realtimeStore } from "../realtime/realtime.store.js";
 import { BatchBuffer } from "./batch-buffer.js";
 
@@ -170,7 +171,7 @@ export function createCollector(
     }
   };
 
-  const flushBatch = () => {
+  const flushBatch = async () => {
     if (isFlushing || !batchBuffer.hasPending()) {
       return;
     }
@@ -179,10 +180,54 @@ export function createCollector(
     try {
       const stats = batchBuffer.flush(db, geoService, id, "Collector");
 
-      if (stats.trafficOk) {
-        realtimeStore.clearTraffic(id);
+      let trafficDetailOk = true;
+      let trafficAggOk = true;
+      if (stats.pendingTrafficWrite) {
+        try {
+          const outcome = await stats.pendingTrafficWrite;
+          trafficDetailOk = outcome.detailOk;
+          trafficAggOk = outcome.aggOk;
+        } catch (err) {
+          if (err instanceof TrafficWriteError) {
+            trafficDetailOk = err.detailOk;
+            trafficAggOk = err.aggOk;
+          } else {
+            trafficDetailOk = false;
+            trafficAggOk = false;
+          }
+          console.warn(
+            `[Collector:${id}] ClickHouse traffic write failed detail_ok=${trafficDetailOk} agg_ok=${trafficAggOk}`,
+            err,
+          );
+        }
       }
-      if (stats.countryOk) {
+
+      if (stats.hasTrafficUpdates && stats.trafficOk) {
+        if (trafficDetailOk && trafficAggOk) {
+          realtimeStore.clearTraffic(id);
+        } else if (trafficDetailOk && !trafficAggOk) {
+          // Detail committed, agg failed: clear detail-side realtime only.
+          realtimeStore.clearTrafficDimensions(id);
+        } else if (!trafficDetailOk && trafficAggOk) {
+          // Agg committed, detail failed: clear summary-side realtime only.
+          realtimeStore.clearTrafficSummary(id);
+        }
+      }
+
+      let countryWriteOk = true;
+      if (stats.pendingCountryWrite) {
+        try {
+          await stats.pendingCountryWrite;
+        } catch (err) {
+          countryWriteOk = false;
+          console.warn(
+            `[Collector:${id}] ClickHouse country write failed, keeping realtime country store`,
+            err,
+          );
+        }
+      }
+
+      if (stats.hasCountryUpdates && stats.countryOk && countryWriteOk) {
         realtimeStore.clearCountries(id);
       }
 
@@ -452,18 +497,24 @@ export function createCollector(
 
   // Override disconnect to clear intervals
   const originalDisconnect = collector.disconnect.bind(collector);
+  const waitForFlushThenDisconnect = async () => {
+    while (isFlushing) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    await flushBatch();
+  };
   collector.disconnect = () => {
     if (flushInterval) {
       clearInterval(flushInterval);
       flushInterval = null;
-      // Final flush
-      flushBatch();
     }
     if (cleanupInterval) {
       clearInterval(cleanupInterval);
       cleanupInterval = null;
     }
-    originalDisconnect();
+    void waitForFlushThenDisconnect().finally(() => {
+      originalDisconnect();
+    });
   };
 
   return collector;

@@ -10,6 +10,23 @@ interface CountryMinuteUpdate {
   timestampMs?: number;
 }
 
+export interface TrafficWriteOutcome {
+  detailOk: boolean;
+  aggOk: boolean;
+}
+
+export class TrafficWriteError extends Error {
+  detailOk: boolean;
+  aggOk: boolean;
+
+  constructor(message: string, detailOk: boolean, aggOk: boolean) {
+    super(message);
+    this.name = 'TrafficWriteError';
+    this.detailOk = detailOk;
+    this.aggOk = aggOk;
+  }
+}
+
 export class ClickHouseWriter {
   private readonly config = loadClickHouseConfig();
   private readonly writeEnabled =
@@ -42,8 +59,13 @@ export class ClickHouseWriter {
     return this.writeEnabled;
   }
 
-  writeTrafficBatch(backendId: number, updates: TrafficUpdate[]): void {
-    if (!this.writeEnabled || updates.length === 0) return;
+  writeTrafficBatch(
+    backendId: number,
+    updates: TrafficUpdate[],
+  ): Promise<TrafficWriteOutcome> {
+    if (!this.writeEnabled || updates.length === 0) {
+      return Promise.resolve({ detailOk: true, aggOk: true });
+    }
 
     const detailRows = updates.map((item) => ({
       backend_id: backendId,
@@ -78,13 +100,14 @@ export class ClickHouseWriter {
     }
     const aggRows = Array.from(aggMap.values());
 
-    // Write to buffer tables — data goes to memory first, auto-flushed to disk every ~60s
-    this.enqueue(() => this.insertRows('traffic_detail_buffer', detailRows, 'traffic'), detailRows.length);
-    this.enqueue(() => this.insertRows('traffic_agg_buffer', aggRows, 'traffic'), aggRows.length);
+    return this.enqueue(
+      () => this.writeTrafficTables(detailRows, aggRows),
+      detailRows.length + aggRows.length,
+    );
   }
 
-  writeCountryBatch(backendId: number, updates: CountryMinuteUpdate[]): void {
-    if (!this.writeEnabled || updates.length === 0) return;
+  writeCountryBatch(backendId: number, updates: CountryMinuteUpdate[]): Promise<void> {
+    if (!this.writeEnabled || updates.length === 0) return Promise.resolve();
 
     const rows = updates.map((item) => ({
       backend_id: backendId,
@@ -97,10 +120,16 @@ export class ClickHouseWriter {
       connections: 1,
     }));
 
-    this.enqueue(() => this.insertRows('country_buffer', rows, 'country'), rows.length);
+    return this.enqueue(() => this.insertRows('country_buffer', rows, 'country'), rows.length);
   }
 
-  private enqueue(task: () => Promise<void>, rowCount: number): void {
+  /**
+   * Enqueue a write task onto the serial write chain.
+   * Returns a promise that **rejects** if the task fails or the batch is dropped,
+   * so callers can avoid clearing the realtime store on failure.
+   * The internal write chain itself always recovers so subsequent writes proceed.
+   */
+  private enqueue<T>(task: () => Promise<T>, rowCount: number): Promise<T> {
     const safeRowCount = Math.max(0, rowCount);
     if (
       this.pendingBatches >= this.maxPendingBatches ||
@@ -111,21 +140,84 @@ export class ClickHouseWriter {
       console.warn(
         `[ClickHouse Writer] Dropped batch because pending queue is full (batches=${this.pendingBatches}/${this.maxPendingBatches}, rows=${this.pendingRows}/${this.maxPendingRows})`,
       );
-      return;
+      return Promise.reject(
+        new Error('ClickHouse write queue full, batch dropped'),
+      );
     }
 
     this.pendingBatches += 1;
     this.pendingRows += safeRowCount;
+
+    // Deferred promise so failure surfaces to caller while chain continues.
+    let resolve!: (value: T) => void;
+    let reject!: (err: unknown) => void;
+    const result = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+
     this.writeChain = this.writeChain
       .then(() => task())
+      .then((value) => {
+        resolve(value);
+      })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         console.warn(`[ClickHouse Writer] Queue task failed: ${message}`);
+        reject(error);
       })
       .finally(() => {
         this.pendingBatches = Math.max(0, this.pendingBatches - 1);
         this.pendingRows = Math.max(0, this.pendingRows - safeRowCount);
       });
+
+    return result;
+  }
+
+  private async writeTrafficTables(
+    detailRows: Array<Record<string, unknown>>,
+    aggRows: Array<Record<string, unknown>>,
+  ): Promise<TrafficWriteOutcome> {
+    let detailOk = false;
+    let aggOk = false;
+    let detailError: unknown;
+    let aggError: unknown;
+
+    try {
+      await this.insertRows('traffic_detail_buffer', detailRows, 'traffic');
+      detailOk = true;
+    } catch (error) {
+      detailError = error;
+    }
+
+    try {
+      await this.insertRows('traffic_agg_buffer', aggRows, 'traffic');
+      aggOk = true;
+    } catch (error) {
+      aggError = error;
+    }
+
+    if (!detailOk || !aggOk) {
+      const detailMsg =
+        detailError instanceof Error
+          ? detailError.message
+          : detailError
+            ? String(detailError)
+            : 'none';
+      const aggMsg =
+        aggError instanceof Error
+          ? aggError.message
+          : aggError
+            ? String(aggError)
+            : 'none';
+      throw new TrafficWriteError(
+        `traffic write failed detail_ok=${detailOk} agg_ok=${aggOk} detail_err=${detailMsg} agg_err=${aggMsg}`,
+        detailOk,
+        aggOk,
+      );
+    }
+
+    return { detailOk: true, aggOk: true };
   }
 
   private async insertRows(
@@ -169,6 +261,8 @@ export class ClickHouseWriter {
       this.maybeLogMetrics();
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[ClickHouse Writer] Failed to insert ${metricType} batch rows=${rows.length}: ${message}`);
+      // Re-throw so enqueue's deferred promise rejects and caller retains realtime data
+      throw error;
     }
   }
 

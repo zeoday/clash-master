@@ -1,6 +1,7 @@
 import { isIPv4, isIPv6 } from "net";
 import type { StatsDatabase } from "../db/db.js";
 import { GeoIPService } from "../geo/geo.service.js";
+import { TrafficWriteError } from "../clickhouse/clickhouse.writer.js";
 import { realtimeStore } from "../realtime/realtime.store.js";
 import type { SurgeRequest, SurgeRequestsData } from "@neko-master/shared";
 import { calculateBackoffDelay } from "../../shared/utils/backoff.js";
@@ -292,7 +293,7 @@ export function createSurgeCollector(
     }
   };
 
-  const flushBatch = () => {
+  const flushBatch = async () => {
     if (isFlushing || !batchBuffer.hasPending()) {
       return;
     }
@@ -301,10 +302,52 @@ export function createSurgeCollector(
     try {
       const stats = batchBuffer.flush(db, geoService, id, "SurgeCollector");
 
-      if (stats.trafficOk) {
-        realtimeStore.clearTraffic(id);
+      let trafficDetailOk = true;
+      let trafficAggOk = true;
+      if (stats.pendingTrafficWrite) {
+        try {
+          const outcome = await stats.pendingTrafficWrite;
+          trafficDetailOk = outcome.detailOk;
+          trafficAggOk = outcome.aggOk;
+        } catch (err) {
+          if (err instanceof TrafficWriteError) {
+            trafficDetailOk = err.detailOk;
+            trafficAggOk = err.aggOk;
+          } else {
+            trafficDetailOk = false;
+            trafficAggOk = false;
+          }
+          console.warn(
+            `[SurgeCollector:${id}] ClickHouse traffic write failed detail_ok=${trafficDetailOk} agg_ok=${trafficAggOk}`,
+            err,
+          );
+        }
       }
-      if (stats.countryOk) {
+
+      if (stats.hasTrafficUpdates && stats.trafficOk) {
+        if (trafficDetailOk && trafficAggOk) {
+          realtimeStore.clearTraffic(id);
+        } else if (trafficDetailOk && !trafficAggOk) {
+          realtimeStore.clearTrafficDimensions(id);
+        } else if (!trafficDetailOk && trafficAggOk) {
+          realtimeStore.clearTrafficSummary(id);
+        }
+      }
+
+      let countryWriteOk = true;
+      if (stats.pendingCountryWrite) {
+        try {
+          await stats.pendingCountryWrite;
+        } catch (err) {
+          countryWriteOk = false;
+          console.warn(
+            `[SurgeCollector:${id}] ClickHouse country write failed, keeping realtime country store`,
+            err,
+          );
+        }
+      }
+
+      if (stats.hasCountryUpdates && stats.countryOk && countryWriteOk) {
         realtimeStore.clearCountries(id);
       }
 
@@ -697,17 +740,24 @@ export function createSurgeCollector(
   });
 
   const originalStop = collector.stop.bind(collector);
+  const waitForFlushThenStop = async () => {
+    while (isFlushing) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    await flushBatch();
+  };
   collector.stop = () => {
     if (flushInterval) {
       clearInterval(flushInterval);
       flushInterval = null;
-      flushBatch();
     }
     if (cleanupInterval) {
       clearInterval(cleanupInterval);
       cleanupInterval = null;
     }
-    originalStop();
+    void waitForFlushThenStop().finally(() => {
+      originalStop();
+    });
   };
 
   // Add debug stats method

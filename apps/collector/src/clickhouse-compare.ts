@@ -95,7 +95,7 @@ export class ClickHouseCompareService {
 SELECT
   toUInt64(COALESCE(SUM(upload), 0)) as upload,
   toUInt64(COALESCE(SUM(download), 0)) as download
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_agg
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toClickHouseDateTime(start)}')
 FORMAT JSON

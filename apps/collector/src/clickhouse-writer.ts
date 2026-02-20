@@ -45,7 +45,7 @@ class ClickHouseWriter {
   writeTrafficBatch(backendId: number, updates: TrafficUpdate[]): void {
     if (!this.writeEnabled || updates.length === 0) return;
 
-    const rows = updates.map((item) => ({
+    const detailRows = updates.map((item) => ({
       backend_id: backendId,
       minute: this.toMinuteDateTime(item.timestampMs),
       domain: item.domain || '',
@@ -63,7 +63,25 @@ class ClickHouseWriter {
       connections: 1,
     }));
 
-    this.enqueue(() => this.insertRows('traffic_minute', rows, 'traffic'), rows.length);
+    // Pre-aggregate by (backend_id, minute) for the lightweight agg table
+    const aggMap = new Map<string, { backend_id: number; minute: string; upload: number; download: number; connections: number }>();
+    for (const row of detailRows) {
+      const key = `${row.backend_id}:${row.minute}`;
+      const existing = aggMap.get(key);
+      if (existing) {
+        existing.upload += row.upload;
+        existing.download += row.download;
+        existing.connections += row.connections;
+      } else {
+        aggMap.set(key, { backend_id: row.backend_id, minute: row.minute, upload: row.upload, download: row.download, connections: row.connections });
+      }
+    }
+    const aggRows = Array.from(aggMap.values());
+
+    // Write to all three tables: legacy compat + optimised pair
+    this.enqueue(() => this.insertRows('traffic_minute', detailRows, 'traffic'), detailRows.length);
+    this.enqueue(() => this.insertRows('traffic_detail', detailRows, 'traffic'), detailRows.length);
+    this.enqueue(() => this.insertRows('traffic_agg', aggRows, 'traffic'), aggRows.length);
   }
 
   writeCountryBatch(backendId: number, updates: CountryMinuteUpdate[]): void {
@@ -112,7 +130,7 @@ class ClickHouseWriter {
   }
 
   private async insertRows(
-    table: 'traffic_minute' | 'country_minute',
+    table: 'traffic_minute' | 'traffic_agg' | 'traffic_detail' | 'country_minute',
     rows: Array<Record<string, unknown>>,
     metricType: 'traffic' | 'country',
   ): Promise<void> {

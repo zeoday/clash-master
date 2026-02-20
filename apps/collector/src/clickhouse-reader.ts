@@ -73,18 +73,38 @@ export class ClickHouseReader {
     start: string,
     end: string,
   ): Promise<ClickHouseSummary | null> {
-    const rows = await this.query<ClickHouseSummary>(`
+    // SUM from lightweight agg table; unique counts from detail table
+    const [aggRows, detailRows] = await Promise.all([
+      this.query<Record<string, unknown>>(`
 SELECT
   toUInt64(COALESCE(SUM(connections), 0)) AS totalConnections,
   toUInt64(COALESCE(SUM(upload), 0)) AS totalUpload,
-  toUInt64(COALESCE(SUM(download), 0)) AS totalDownload,
-  toUInt64(uniqExactIf(domain, domain != '')) AS uniqueDomains,
-  toUInt64(uniqExactIf(ip, ip != '')) AS uniqueIPs
-FROM ${this.config.database}.traffic_minute
+  toUInt64(COALESCE(SUM(download), 0)) AS totalDownload
+FROM ${this.config.database}.traffic_agg
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
-`);
+`),
+      this.query<Record<string, unknown>>(`
+SELECT
+  toUInt64(uniqIf(domain, domain != '')) AS uniqueDomains,
+  toUInt64(uniqIf(ip, ip != '')) AS uniqueIPs
+FROM ${this.config.database}.traffic_detail
+WHERE backend_id = ${backendId}
+  AND minute >= toDateTime('${this.toDateTime(start)}')
+  AND minute <= toDateTime('${this.toDateTime(end)}')
+`),
+    ]);
+    if (!aggRows || !detailRows) return null;
+    const agg = aggRows[0] || {};
+    const detail = detailRows[0] || {};
+    const rows: ClickHouseSummary[] = [{
+      totalConnections: Number(agg.totalConnections || 0),
+      totalUpload: Number(agg.totalUpload || 0),
+      totalDownload: Number(agg.totalDownload || 0),
+      uniqueDomains: Number(detail.uniqueDomains || 0),
+      uniqueIPs: Number(detail.uniqueIPs || 0),
+    }];
     return rows?.[0] || null;
   }
 
@@ -101,7 +121,7 @@ SELECT
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_detail
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -136,7 +156,7 @@ SELECT
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_detail
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -169,7 +189,7 @@ SELECT
   toUInt64(SUM(upload)) AS upload,
   toUInt64(SUM(download)) AS download,
   toUInt64(SUM(connections)) AS connections
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_agg
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -237,7 +257,7 @@ LIMIT ${Math.max(1, limit)}
 SELECT
   toUInt64(COALESCE(SUM(upload), 0)) AS upload,
   toUInt64(COALESCE(SUM(download), 0)) AS download
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_agg
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -260,7 +280,7 @@ SELECT
   toString(minute) AS time,
   toUInt64(SUM(upload)) AS upload,
   toUInt64(SUM(download)) AS download
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_agg
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -292,7 +312,7 @@ SELECT
   toString(${bucketExpr}) AS time,
   toUInt64(SUM(upload)) AS upload,
   toUInt64(SUM(download)) AS download
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_agg
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -339,7 +359,7 @@ ORDER BY time ASC
 SELECT toUInt64(COUNT()) AS total
 FROM (
   SELECT domain
-  FROM ${this.config.database}.traffic_minute
+  FROM ${this.config.database}.traffic_detail
   WHERE backend_id = ${backendId}
     AND minute >= toDateTime('${this.toDateTime(start)}')
     AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -358,7 +378,7 @@ SELECT
   toString(max(minute)) AS lastSeen,
   arrayDistinct(groupArrayIf(rule, rule != '')) AS rules,
   arrayDistinct(groupArrayIf(chain, chain != '')) AS chains
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_detail
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -416,7 +436,7 @@ LIMIT ${limit} OFFSET ${offset}
 SELECT toUInt64(COUNT()) AS total
 FROM (
   SELECT ip
-  FROM ${this.config.database}.traffic_minute
+  FROM ${this.config.database}.traffic_detail
   WHERE backend_id = ${backendId}
     AND minute >= toDateTime('${this.toDateTime(start)}')
     AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -434,7 +454,7 @@ SELECT
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen,
   arrayDistinct(groupArrayIf(chain, chain != '')) AS chains
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_detail
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -466,21 +486,21 @@ LIMIT ${limit} OFFSET ${offset}
   ): Promise<ProxyStats[] | null> {
     const rows = await this.query<Record<string, unknown>>(`
 SELECT
-  arrayElement(splitByString(' > ', chain), 1) AS chain,
+  arrayElement(splitByString(' > ', chain), 1) AS proxy_name,
   toUInt64(SUM(upload)) AS totalUpload,
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_detail
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
-GROUP BY chain
+GROUP BY proxy_name
 ORDER BY (SUM(upload) + SUM(download)) DESC
 `);
     if (!rows) return null;
     return rows.map((row) => ({
-      chain: String(row.chain || ''),
+      chain: String(row.proxy_name || ''),
       totalUpload: Number(row.totalUpload || 0),
       totalDownload: Number(row.totalDownload || 0),
       totalConnections: Number(row.totalConnections || 0),
@@ -501,7 +521,7 @@ SELECT
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_detail
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -528,15 +548,30 @@ ORDER BY (SUM(upload) + SUM(download)) DESC
     uniqueIPs: number;
     backendCount: number;
   } | null> {
-    const rows = await this.query<Record<string, unknown>>(`
+    const [aggRows, detailRows] = await Promise.all([
+      this.query<Record<string, unknown>>(`
 SELECT
   toUInt64(COALESCE(SUM(connections), 0)) AS totalConnections,
   toUInt64(COALESCE(SUM(upload), 0)) AS totalUpload,
-  toUInt64(COALESCE(SUM(download), 0)) AS totalDownload,
-  toUInt64(uniqExactIf(domain, domain != '')) AS uniqueDomains,
-  toUInt64(uniqExactIf(ip, ip != '')) AS uniqueIPs
-FROM ${this.config.database}.traffic_minute
-`);
+  toUInt64(COALESCE(SUM(download), 0)) AS totalDownload
+FROM ${this.config.database}.traffic_agg
+WHERE minute >= now() - INTERVAL 90 DAY
+`),
+      this.query<Record<string, unknown>>(`
+SELECT
+  toUInt64(uniqIf(domain, domain != '')) AS uniqueDomains,
+  toUInt64(uniqIf(ip, ip != '')) AS uniqueIPs
+FROM ${this.config.database}.traffic_detail
+WHERE minute >= now() - INTERVAL 90 DAY
+`),
+    ]);
+    const rows = aggRows && detailRows ? [{
+      totalConnections: (aggRows[0] as any)?.totalConnections || 0,
+      totalUpload: (aggRows[0] as any)?.totalUpload || 0,
+      totalDownload: (aggRows[0] as any)?.totalDownload || 0,
+      uniqueDomains: (detailRows[0] as any)?.uniqueDomains || 0,
+      uniqueIPs: (detailRows[0] as any)?.uniqueIPs || 0,
+    }] : null;
     if (!rows || rows.length === 0) return null;
     const row = rows[0];
     return {
@@ -559,7 +594,7 @@ FROM ${this.config.database}.traffic_minute
 SELECT
   rule,
   groupUniqArray(arrayElement(splitByString(' > ', chain), 1)) AS proxies
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_detail
 WHERE backend_id = ${backendId}
   AND rule != ''
   AND chain != ''${timeWhere}
@@ -844,7 +879,7 @@ SELECT
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_detail
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -888,7 +923,7 @@ SELECT
   toString(max(minute)) AS lastSeen,
   arrayDistinct(groupArrayIf(rule, rule != '')) AS rules,
   arrayDistinct(groupArrayIf(chain, chain != '')) AS chains
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_detail
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -934,7 +969,7 @@ SELECT
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen,
   arrayDistinct(groupArrayIf(chain, chain != '')) AS chains
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_detail
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -975,7 +1010,7 @@ SELECT
   toUInt64(SUM(upload)) AS totalUpload,
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_detail
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -1007,7 +1042,7 @@ SELECT
   toUInt64(SUM(upload)) AS totalUpload,
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections
-FROM ${this.config.database}.traffic_minute
+FROM ${this.config.database}.traffic_detail
 WHERE backend_id = ${backendId}
   AND rule != ''
   AND chain != ''${timeWhere}${ruleWhere}
@@ -1166,7 +1201,7 @@ ORDER BY rule, chain
   }
 
   private esc(value: string): string {
-    return value.replace(/'/g, "''");
+    return value.replace(/\\/g, '\\\\').replace(/'/g, "''");
   }
 
   private parseSource(value: string | undefined): StatsQuerySource {

@@ -213,5 +213,47 @@ SETTINGS index_granularity = 8192
 `,
   );
 
-  console.info('[ClickHouse] Schema ensured (traffic_minute, country_minute)');
+  // Optimised tables — split by query pattern to reduce I/O
+  // traffic_agg: lightweight SummingMergeTree for summary / trend / hourly queries
+  await runClickHouseQuery(
+    config,
+    `
+CREATE TABLE IF NOT EXISTS ${config.database}.traffic_agg (
+  backend_id UInt32,
+  minute DateTime,
+  upload UInt64,
+  download UInt64,
+  connections UInt32
+) ENGINE = SummingMergeTree
+PARTITION BY toYYYYMM(minute)
+ORDER BY (backend_id, minute)
+TTL minute + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192
+`,
+  );
+
+  // traffic_detail: full-dimension MergeTree for top-N / filter / rule-chain queries
+  await runClickHouseQuery(
+    config,
+    `
+CREATE TABLE IF NOT EXISTS ${config.database}.traffic_detail (
+  backend_id UInt32,
+  minute DateTime,
+  domain String,
+  ip String,
+  source_ip String,
+  chain String,
+  rule String,
+  upload UInt64,
+  download UInt64,
+  connections UInt32
+) ENGINE = MergeTree
+PARTITION BY toYYYYMM(minute)
+ORDER BY (backend_id, minute, domain, ip)
+TTL minute + INTERVAL 90 DAY
+SETTINGS index_granularity = 8192
+`,
+  );
+
+  console.info('[ClickHouse] Schema ensured (traffic_minute, country_minute, traffic_agg, traffic_detail)');
 }

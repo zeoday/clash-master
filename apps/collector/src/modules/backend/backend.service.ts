@@ -18,6 +18,7 @@ import type {
   RotateAgentTokenResult,
 } from './backend.types.js';
 import { isAgentBackendUrl } from '@neko-master/shared';
+import { loadClickHouseConfig, runClickHouseQuery } from '../../clickhouse.js';
 
 import type { AuthService } from '../auth/auth.service.js';
 
@@ -53,6 +54,7 @@ export class BackendService {
     private db: StatsDatabase,
     private realtimeStore: RealtimeStore,
     private authService: AuthService,
+    private onBackendDataCleared?: (backendId: number) => void,
   ) {}
 
   /**
@@ -296,8 +298,11 @@ export class BackendService {
   /**
    * Delete a backend
    */
-  deleteBackend(id: number): { message: string } {
+  async deleteBackend(id: number): Promise<{ message: string }> {
+    await this.clearClickHouseBackendData(id);
     this.db.deleteBackend(id);
+    this.realtimeStore.clearBackend(id);
+    this.onBackendDataCleared?.(id);
     return { message: 'Backend deleted successfully' };
   }
 
@@ -345,11 +350,37 @@ export class BackendService {
   /**
    * Clear all data for a specific backend
    */
-  clearBackendData(id: number): { message: string } {
+  async clearBackendData(id: number): Promise<{ message: string }> {
     this.db.deleteBackendData(id);
+    await this.clearClickHouseBackendData(id);
     // Also clear realtime cache
     this.realtimeStore.clearBackend(id);
+    this.onBackendDataCleared?.(id);
     return { message: 'Backend data cleared successfully' };
+  }
+
+  private async clearClickHouseBackendData(backendId: number): Promise<void> {
+    const config = loadClickHouseConfig();
+    if (!config.enabled) {
+      return;
+    }
+
+    try {
+      await runClickHouseQuery(
+        config,
+        `ALTER TABLE ${config.database}.traffic_minute DELETE WHERE backend_id = ${backendId} SETTINGS mutations_sync = 2`,
+      );
+      await runClickHouseQuery(
+        config,
+        `ALTER TABLE ${config.database}.country_minute DELETE WHERE backend_id = ${backendId} SETTINGS mutations_sync = 2`,
+      );
+      console.info(`[BackendService] Cleared ClickHouse stats for backend ${backendId}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[BackendService] Failed to clear ClickHouse stats for backend ${backendId}: ${message}`,
+      );
+    }
   }
 
   /**

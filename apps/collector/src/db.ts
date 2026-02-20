@@ -864,6 +864,20 @@ export class StatsDatabase {
     return value;
   }
 
+  clearRangeQueryCache(backendId?: number): void {
+    if (backendId === undefined) {
+      this.rangeQueryCache.clear();
+      return;
+    }
+
+    const backendMarker = `:${backendId}|`;
+    for (const key of this.rangeQueryCache.keys()) {
+      if (key.includes(backendMarker)) {
+        this.rangeQueryCache.delete(key);
+      }
+    }
+  }
+
   private prepareSummaryStmts() {
     return {
       rangeCombined: this.db.prepare(`
@@ -966,8 +980,14 @@ export class StatsDatabase {
   updateBackend(id: number, updates: Partial<Omit<BackendConfig, 'id' | 'created_at'>>) { this.repos.backend.updateBackend(id, updates); }
   setActiveBackend(id: number) { this.repos.backend.setActiveBackend(id); }
   setBackendListening(id: number, listening: boolean) { this.repos.backend.setBackendListening(id, listening); }
-  deleteBackend(id: number) { this.repos.backend.deleteBackend(id); }
-  deleteBackendData(id: number) { this.repos.backend.deleteBackendData(id); }
+  deleteBackend(id: number) {
+    this.repos.backend.deleteBackend(id);
+    this.clearRangeQueryCache(id);
+  }
+  deleteBackendData(id: number) {
+    this.repos.backend.deleteBackendData(id);
+    this.clearRangeQueryCache(id);
+  }
   getGlobalSummary() { return this.repos.backend.getGlobalSummary(); }
 
   upsertAgentHeartbeat(input: {

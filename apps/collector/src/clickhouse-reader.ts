@@ -1,7 +1,46 @@
-import type { DomainStats, HourlyStats, IPStats } from '@neko-master/shared';
+import type {
+  DomainStats,
+  HourlyStats,
+  IPStats,
+  ProxyStats,
+  RuleStats,
+} from '@neko-master/shared';
 import { loadClickHouseConfig } from './clickhouse.js';
 
 type StatsQuerySource = 'sqlite' | 'clickhouse' | 'auto';
+
+type RuleChainTrafficRow = {
+  rule: string;
+  chain: string;
+  totalUpload: number;
+  totalDownload: number;
+  totalConnections: number;
+};
+
+type RuleChainFlow = {
+  nodes: Array<{
+    name: string;
+    totalUpload: number;
+    totalDownload: number;
+    totalConnections: number;
+  }>;
+  links: Array<{ source: number; target: number }>;
+};
+
+type RuleChainFlowAll = {
+  nodes: Array<{
+    name: string;
+    layer: number;
+    nodeType: 'rule' | 'group' | 'proxy';
+    totalUpload: number;
+    totalDownload: number;
+    totalConnections: number;
+    rules: string[];
+  }>;
+  links: Array<{ source: number; target: number; rules: string[] }>;
+  rulePaths: Record<string, { nodeIndices: number[]; linkIndices: number[] }>;
+  maxLayer: number;
+};
 
 export type ClickHouseSummary = {
   totalConnections: number;
@@ -14,10 +53,15 @@ export type ClickHouseSummary = {
 export class ClickHouseReader {
   private readonly config = loadClickHouseConfig();
   private readonly source = this.parseSource(process.env.STATS_QUERY_SOURCE);
+  private readonly strictStats = process.env.CH_STRICT_STATS === '1';
+
+  shouldUse(): boolean {
+    if (!this.config.enabled) return false;
+    return this.source !== 'sqlite';
+  }
 
   shouldUseForRange(start?: string, end?: string): boolean {
-    if (!this.config.enabled) return false;
-    if (this.source === 'sqlite') return false;
+    if (!this.shouldUse()) return false;
     if (!start || !end) return false;
     const startMs = new Date(start).getTime();
     const endMs = new Date(end).getTime();
@@ -415,10 +459,14 @@ LIMIT ${limit} OFFSET ${offset}
     return { data, total };
   }
 
-  async getProxyStats(backendId: number, start: string, end: string): Promise<any[] | null> {
-    const rows = await this.query<any>(`
+  async getProxyStats(
+    backendId: number,
+    start: string,
+    end: string,
+  ): Promise<ProxyStats[] | null> {
+    const rows = await this.query<Record<string, unknown>>(`
 SELECT
-  chain,
+  arrayElement(splitByString(' > ', chain), 1) AS chain,
   toUInt64(SUM(upload)) AS totalUpload,
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections,
@@ -431,7 +479,7 @@ GROUP BY chain
 ORDER BY (SUM(upload) + SUM(download)) DESC
 `);
     if (!rows) return null;
-    return rows.map((row: any) => ({
+    return rows.map((row) => ({
       chain: String(row.chain || ''),
       totalUpload: Number(row.totalUpload || 0),
       totalDownload: Number(row.totalDownload || 0),
@@ -440,11 +488,15 @@ ORDER BY (SUM(upload) + SUM(download)) DESC
     }));
   }
 
-  async getRuleStats(backendId: number, start: string, end: string): Promise<any[] | null> {
-    const rows = await this.query<any>(`
+  async getRuleStats(
+    backendId: number,
+    start: string,
+    end: string,
+  ): Promise<RuleStats[] | null> {
+    const rows = await this.query<Record<string, unknown>>(`
 SELECT
   rule,
-  any(chain) AS finalProxy,
+  arrayElement(splitByString(' > ', any(chain)), 1) AS finalProxy,
   toUInt64(SUM(upload)) AS totalUpload,
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections,
@@ -453,11 +505,12 @@ FROM ${this.config.database}.traffic_minute
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
+  AND rule != ''
 GROUP BY rule
 ORDER BY (SUM(upload) + SUM(download)) DESC
 `);
     if (!rows) return null;
-    return rows.map((row: any) => ({
+    return rows.map((row) => ({
       rule: String(row.rule || ''),
       finalProxy: String(row.finalProxy || ''),
       totalUpload: Number(row.totalUpload || 0),
@@ -465,6 +518,322 @@ ORDER BY (SUM(upload) + SUM(download)) DESC
       totalConnections: Number(row.totalConnections || 0),
       lastSeen: String(row.lastSeen || ''),
     }));
+  }
+
+  async getGlobalSummary(backendCount: number): Promise<{
+    totalConnections: number;
+    totalUpload: number;
+    totalDownload: number;
+    uniqueDomains: number;
+    uniqueIPs: number;
+    backendCount: number;
+  } | null> {
+    const rows = await this.query<Record<string, unknown>>(`
+SELECT
+  toUInt64(COALESCE(SUM(connections), 0)) AS totalConnections,
+  toUInt64(COALESCE(SUM(upload), 0)) AS totalUpload,
+  toUInt64(COALESCE(SUM(download), 0)) AS totalDownload,
+  toUInt64(uniqExactIf(domain, domain != '')) AS uniqueDomains,
+  toUInt64(uniqExactIf(ip, ip != '')) AS uniqueIPs
+FROM ${this.config.database}.traffic_minute
+`);
+    if (!rows || rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      totalConnections: Number(row.totalConnections || 0),
+      totalUpload: Number(row.totalUpload || 0),
+      totalDownload: Number(row.totalDownload || 0),
+      uniqueDomains: Number(row.uniqueDomains || 0),
+      uniqueIPs: Number(row.uniqueIPs || 0),
+      backendCount,
+    };
+  }
+
+  async getRuleProxyMap(
+    backendId: number,
+    start?: string,
+    end?: string,
+  ): Promise<Array<{ rule: string; proxies: string[] }> | null> {
+    const timeWhere = this.buildTimeWhere(start, end);
+    const rows = await this.query<Record<string, unknown>>(`
+SELECT
+  rule,
+  groupUniqArray(arrayElement(splitByString(' > ', chain), 1)) AS proxies
+FROM ${this.config.database}.traffic_minute
+WHERE backend_id = ${backendId}
+  AND rule != ''
+  AND chain != ''${timeWhere}
+GROUP BY rule
+ORDER BY rule ASC
+`);
+    if (!rows) return null;
+    return rows.map((row) => ({
+      rule: String(row.rule || ''),
+      proxies: Array.isArray(row.proxies)
+        ? row.proxies.map(String).filter(Boolean).sort((a, b) => a.localeCompare(b))
+        : [],
+    }));
+  }
+
+  async getRuleChainFlow(
+    backendId: number,
+    rule: string,
+    start?: string,
+    end?: string,
+  ): Promise<RuleChainFlow | null> {
+    const rows = await this.getRuleChainTrafficRows(backendId, start, end, rule);
+    if (rows === null) return null;
+
+    const nodeMap = new Map<
+      string,
+      {
+        name: string;
+        totalUpload: number;
+        totalDownload: number;
+        totalConnections: number;
+      }
+    >();
+    const linkSet = new Set<string>();
+
+    for (const row of rows) {
+      const flowPath = this.buildRuleFlowPath(rule, row.chain);
+      if (flowPath.length < 2) continue;
+
+      for (let index = 0; index < flowPath.length; index += 1) {
+        const nodeName = flowPath[index];
+        if (!nodeMap.has(nodeName)) {
+          nodeMap.set(nodeName, {
+            name: nodeName,
+            totalUpload: 0,
+            totalDownload: 0,
+            totalConnections: 0,
+          });
+        }
+        const node = nodeMap.get(nodeName)!;
+        node.totalUpload += row.totalUpload;
+        node.totalDownload += row.totalDownload;
+        node.totalConnections += row.totalConnections;
+      }
+
+      for (let index = 0; index < flowPath.length - 1; index += 1) {
+        linkSet.add(this.encodeFlowLinkKey(flowPath[index], flowPath[index + 1]));
+      }
+    }
+
+    const nodes = Array.from(nodeMap.values());
+    const nodeIndexMap = new Map(nodes.map((node, index) => [node.name, index]));
+    const links = Array.from(linkSet)
+      .map((linkKey) => {
+        const decoded = this.decodeFlowLinkKey(linkKey);
+        if (!decoded) return null;
+        const [sourceName, targetName] = decoded;
+        const source = nodeIndexMap.get(sourceName);
+        const target = nodeIndexMap.get(targetName);
+        if (source === undefined || target === undefined) return null;
+        return { source, target };
+      })
+      .filter((link): link is { source: number; target: number } => !!link);
+
+    return { nodes, links };
+  }
+
+  async getAllRuleChainFlows(
+    backendId: number,
+    start?: string,
+    end?: string,
+  ): Promise<RuleChainFlowAll | null> {
+    const rows = await this.getRuleChainTrafficRows(backendId, start, end);
+    if (rows === null) return null;
+
+    const nodeMap = new Map<
+      string,
+      {
+        totalUpload: number;
+        totalDownload: number;
+        totalConnections: number;
+        rules: Set<string>;
+        layer: number;
+      }
+    >();
+    const linkMap = new Map<string, Set<string>>();
+    const rulePathNodes = new Map<string, Set<string>>();
+    const rulePathLinks = new Map<string, Set<string>>();
+    const outgoingByNode = new Map<string, Set<string>>();
+    const incomingByNode = new Map<string, Set<string>>();
+
+    for (const row of rows) {
+      const ruleName = row.rule;
+      if (!rulePathNodes.has(ruleName)) {
+        rulePathNodes.set(ruleName, new Set());
+        rulePathLinks.set(ruleName, new Set());
+      }
+
+      const flowPath = this.buildRuleFlowPath(ruleName, row.chain);
+      if (flowPath.length < 2) continue;
+
+      for (let index = 0; index < flowPath.length; index += 1) {
+        const nodeName = flowPath[index];
+        if (!nodeMap.has(nodeName)) {
+          nodeMap.set(nodeName, {
+            totalUpload: 0,
+            totalDownload: 0,
+            totalConnections: 0,
+            rules: new Set(),
+            layer: index,
+          });
+        }
+        const node = nodeMap.get(nodeName)!;
+        node.totalUpload += row.totalUpload;
+        node.totalDownload += row.totalDownload;
+        node.totalConnections += row.totalConnections;
+        node.rules.add(ruleName);
+        node.layer = Math.max(node.layer, index);
+        rulePathNodes.get(ruleName)!.add(nodeName);
+      }
+
+      for (let index = 0; index < flowPath.length - 1; index += 1) {
+        const sourceName = flowPath[index];
+        const targetName = flowPath[index + 1];
+        const linkKey = this.encodeFlowLinkKey(sourceName, targetName);
+        if (!linkMap.has(linkKey)) {
+          linkMap.set(linkKey, new Set());
+        }
+        linkMap.get(linkKey)!.add(ruleName);
+        rulePathLinks.get(ruleName)!.add(linkKey);
+
+        if (!outgoingByNode.has(sourceName)) {
+          outgoingByNode.set(sourceName, new Set());
+        }
+        outgoingByNode.get(sourceName)!.add(targetName);
+
+        if (!incomingByNode.has(targetName)) {
+          incomingByNode.set(targetName, new Set());
+        }
+        incomingByNode.get(targetName)!.add(sourceName);
+      }
+    }
+
+    const nodeEntries = Array.from(nodeMap.entries());
+    const nodeTypeMap = new Map<string, 'rule' | 'group' | 'proxy'>();
+    let computedMaxLayer = 0;
+
+    const isBuiltInPolicy = (name: string): boolean =>
+      name === 'DIRECT' || name === 'REJECT' || name === 'REJECT-TINY';
+
+    for (const [name, nodeData] of nodeEntries) {
+      const hasOutgoing = (outgoingByNode.get(name)?.size ?? 0) > 0;
+      const hasIncoming = (incomingByNode.get(name)?.size ?? 0) > 0;
+
+      if (!hasIncoming) {
+        nodeTypeMap.set(name, 'rule');
+        nodeData.layer = 0;
+      } else if (!hasOutgoing && !isBuiltInPolicy(name)) {
+        nodeTypeMap.set(name, 'proxy');
+      } else {
+        nodeTypeMap.set(name, 'group');
+      }
+      computedMaxLayer = Math.max(computedMaxLayer, nodeData.layer);
+    }
+
+    for (const [name, nodeData] of nodeEntries) {
+      if (nodeTypeMap.get(name) === 'proxy') {
+        nodeData.layer = computedMaxLayer;
+      }
+    }
+
+    const nodeTypeOrder = (type: 'rule' | 'group' | 'proxy'): number =>
+      type === 'rule' ? 0 : type === 'group' ? 1 : 2;
+
+    const sortedNodeEntries = [...nodeEntries].sort(
+      ([nameA, dataA], [nameB, dataB]) => {
+        if (dataA.layer !== dataB.layer) {
+          return dataA.layer - dataB.layer;
+        }
+        const typeDiff =
+          nodeTypeOrder(nodeTypeMap.get(nameA)!) -
+          nodeTypeOrder(nodeTypeMap.get(nameB)!);
+        if (typeDiff !== 0) {
+          return typeDiff;
+        }
+        return nameA.localeCompare(nameB);
+      },
+    );
+
+    const nodes = sortedNodeEntries.map(([name, data]) => ({
+      name,
+      layer: data.layer,
+      nodeType: nodeTypeMap.get(name)!,
+      totalUpload: data.totalUpload,
+      totalDownload: data.totalDownload,
+      totalConnections: data.totalConnections,
+      rules: Array.from(data.rules),
+    }));
+
+    const nodeIndexMap = new Map(nodes.map((node, index) => [node.name, index]));
+
+    const links = Array.from(linkMap.entries())
+      .map(([key, rules]) => {
+        const decoded = this.decodeFlowLinkKey(key);
+        if (!decoded) return null;
+        const [sourceName, targetName] = decoded;
+        const source = nodeIndexMap.get(sourceName);
+        const target = nodeIndexMap.get(targetName);
+        if (source === undefined || target === undefined) return null;
+        return {
+          sourceName,
+          targetName,
+          source,
+          target,
+          rules: Array.from(rules),
+        };
+      })
+      .filter(
+        (link): link is {
+          sourceName: string;
+          targetName: string;
+          source: number;
+          target: number;
+          rules: string[];
+        } => !!link,
+      )
+      .sort((left, right) => {
+        const sourceDiff = left.sourceName.localeCompare(right.sourceName);
+        if (sourceDiff !== 0) return sourceDiff;
+        return left.targetName.localeCompare(right.targetName);
+      })
+      .map(({ source, target, rules }) => ({ source, target, rules }));
+
+    const rulePaths: Record<string, { nodeIndices: number[]; linkIndices: number[] }> =
+      {};
+    for (const [ruleName, nodeNames] of rulePathNodes) {
+      const nodeIndices = Array.from(nodeNames)
+        .map((name) => nodeIndexMap.get(name)!)
+        .filter((index) => index !== undefined);
+      const linkIndices: number[] = [];
+      const linkKeys = rulePathLinks.get(ruleName)!;
+
+      links.forEach((link, index) => {
+        const sourceName = nodes[link.source].name;
+        const targetName = nodes[link.target].name;
+        if (linkKeys.has(this.encodeFlowLinkKey(sourceName, targetName))) {
+          linkIndices.push(index);
+        }
+      });
+
+      rulePaths[ruleName] = { nodeIndices, linkIndices };
+    }
+
+    const maxLayer = nodes.reduce(
+      (max, node) => Math.max(max, node.layer),
+      0,
+    );
+
+    return { nodes, links, rulePaths, maxLayer };
+  }
+
+  getRecentConnections(_backendId: number, _limit: number): [] {
+    // connection_logs is deprecated; keep API compatibility.
+    return [];
   }
 
   async getDeviceStats(backendId: number, start: string, end: string, limit: number): Promise<any[] | null> {
@@ -501,6 +870,7 @@ LIMIT ${Math.max(1, limit)}
     limit: number,
     filters: {
       chain?: string;
+      sourceChain?: string;
       rule?: string;
       sourceIP?: string;
       domain?: string;
@@ -547,6 +917,7 @@ LIMIT ${Math.max(1, limit)}
     limit: number,
     filters: {
       chain?: string;
+      sourceChain?: string;
       rule?: string;
       sourceIP?: string;
       domain?: string;
@@ -590,6 +961,7 @@ LIMIT ${Math.max(1, limit)}
     end: string,
     filters: {
       chain?: string;
+      sourceChain?: string;
       rule?: string;
       sourceIP?: string;
       domain?: string;
@@ -620,6 +992,118 @@ ORDER BY (SUM(upload) + SUM(download)) DESC
     }));
   }
 
+  private async getRuleChainTrafficRows(
+    backendId: number,
+    start?: string,
+    end?: string,
+    rule?: string,
+  ): Promise<RuleChainTrafficRow[] | null> {
+    const timeWhere = this.buildTimeWhere(start, end);
+    const ruleWhere = rule ? ` AND rule = '${this.esc(rule)}'` : '';
+    const rows = await this.query<Record<string, unknown>>(`
+SELECT
+  rule,
+  chain,
+  toUInt64(SUM(upload)) AS totalUpload,
+  toUInt64(SUM(download)) AS totalDownload,
+  toUInt64(SUM(connections)) AS totalConnections
+FROM ${this.config.database}.traffic_minute
+WHERE backend_id = ${backendId}
+  AND rule != ''
+  AND chain != ''${timeWhere}${ruleWhere}
+GROUP BY rule, chain
+ORDER BY rule, chain
+`);
+    if (!rows) return null;
+    return rows.map((row) => ({
+      rule: String(row.rule || ''),
+      chain: String(row.chain || ''),
+      totalUpload: Number(row.totalUpload || 0),
+      totalDownload: Number(row.totalDownload || 0),
+      totalConnections: Number(row.totalConnections || 0),
+    }));
+  }
+
+  private buildTimeWhere(start?: string, end?: string): string {
+    if (!start || !end) return '';
+    return `\n  AND minute >= toDateTime('${this.toDateTime(start)}')\n  AND minute <= toDateTime('${this.toDateTime(end)}')`;
+  }
+
+  private encodeFlowLinkKey(sourceName: string, targetName: string): string {
+    return JSON.stringify([sourceName, targetName]);
+  }
+
+  private decodeFlowLinkKey(
+    key: string,
+  ): [sourceName: string, targetName: string] | null {
+    try {
+      const parsed = JSON.parse(key) as unknown;
+      if (
+        Array.isArray(parsed) &&
+        parsed.length === 2 &&
+        typeof parsed[0] === 'string' &&
+        typeof parsed[1] === 'string'
+      ) {
+        return [parsed[0], parsed[1]];
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  private splitChainParts(chain: string): string[] {
+    return chain
+      .split('>')
+      .map((part) => part.trim())
+      .filter(Boolean);
+  }
+
+  private normalizeFlowLabel(label: string): string {
+    return label
+      .normalize('NFKC')
+      .replace(/^[^\p{L}\p{N}]+/gu, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  private findRuleIndexInChain(chainParts: string[], rule: string): number {
+    const exactIndex = chainParts.findIndex((part) => part === rule);
+    if (exactIndex !== -1) {
+      return exactIndex;
+    }
+
+    const normalizedRule = this.normalizeFlowLabel(rule);
+    if (!normalizedRule) {
+      return -1;
+    }
+
+    return chainParts.findIndex(
+      (part) => this.normalizeFlowLabel(part) === normalizedRule,
+    );
+  }
+
+  private buildRuleFlowPath(rule: string, chain: string): string[] {
+    const chainParts = this.splitChainParts(chain);
+    if (chainParts.length === 0) {
+      return [];
+    }
+
+    const ruleIndex = this.findRuleIndexInChain(chainParts, rule);
+    if (ruleIndex !== -1) {
+      return chainParts.slice(0, ruleIndex + 1).reverse();
+    }
+
+    const reversed = [...chainParts].reverse();
+    const normalizedRule = this.normalizeFlowLabel(rule);
+    const normalizedHead = this.normalizeFlowLabel(reversed[0] || '');
+    if (normalizedRule && normalizedRule === normalizedHead) {
+      return reversed;
+    }
+    return [rule, ...reversed];
+  }
+
   private async query<T>(query: string): Promise<T[] | null> {
     if (!this.config.enabled) return null;
     const baseUrl = `${this.config.protocol}://${this.config.host}:${this.config.port}`;
@@ -647,7 +1131,7 @@ ORDER BY (SUM(upload) + SUM(download)) DESC
       return json.data || [];
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (this.source === 'clickhouse') {
+      if (this.source === 'clickhouse' || this.strictStats) {
         throw new Error(`[ClickHouse Reader] strict mode query failed: ${message}`);
       }
       console.warn(`[ClickHouse Reader] query failed, fallback to sqlite: ${message}`);
@@ -665,7 +1149,14 @@ ORDER BY (SUM(upload) + SUM(download)) DESC
 
   private buildFilters(filters: Record<string, string | undefined>): string {
     const clauses: string[] = [];
-    if (filters.chain) clauses.push(`chain = '${this.esc(filters.chain)}'`);
+    if (filters.chain) {
+      const chain = this.esc(filters.chain);
+      clauses.push(`(chain = '${chain}' OR startsWith(chain, '${chain} > '))`);
+    }
+    if (filters.sourceChain) {
+      const chain = this.esc(filters.sourceChain);
+      clauses.push(`(chain = '${chain}' OR startsWith(chain, '${chain} > '))`);
+    }
     if (filters.rule) clauses.push(`rule = '${this.esc(filters.rule)}'`);
     if (filters.sourceIP) clauses.push(`source_ip = '${this.esc(filters.sourceIP)}'`);
     if (filters.domain) clauses.push(`domain = '${this.esc(filters.domain)}'`);
@@ -680,9 +1171,20 @@ ORDER BY (SUM(upload) + SUM(download)) DESC
 
   private parseSource(value: string | undefined): StatsQuerySource {
     const normalized = String(value || 'sqlite').trim().toLowerCase();
-    if (normalized === 'clickhouse' || normalized === 'auto') {
+    if (normalized === 'clickhouse' || normalized === 'auto' || normalized === 'sqlite') {
       return normalized;
+    }
+    // Tolerate common typo to avoid accidental fallback loops.
+    if (normalized === 'clickhous') {
+      console.warn('[ClickHouse Reader] STATS_QUERY_SOURCE=clickhous is invalid, treating it as clickhouse');
+      return 'clickhouse';
+    }
+    if (value && normalized !== 'sqlite') {
+      console.warn(
+        `[ClickHouse Reader] Invalid STATS_QUERY_SOURCE=${value}, fallback to sqlite`,
+      );
     }
     return 'sqlite';
   }
+
 }

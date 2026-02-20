@@ -38,6 +38,7 @@ export interface AppOptions {
   policySyncService?: SurgePolicySyncService;
   autoListen?: boolean;
   onTrafficIngested?: (backendId: number) => void;
+  onBackendDataCleared?: (backendId: number) => void;
 }
 
 type AgentTrafficUpdatePayload = {
@@ -81,6 +82,7 @@ export async function createApp(options: AppOptions) {
     policySyncService,
     autoListen = true,
     onTrafficIngested,
+    onBackendDataCleared,
   } = options;
   
   // Create Fastify instance
@@ -110,7 +112,12 @@ export async function createApp(options: AppOptions) {
 
   // Create services
   const authService = new AuthService(db);
-  const backendService = new BackendService(db, realtimeStore, authService);
+  const backendService = new BackendService(
+    db,
+    realtimeStore,
+    authService,
+    onBackendDataCleared,
+  );
   const statsService = new StatsService(db, realtimeStore);
 
   // Decorate Fastify instance with services
@@ -911,6 +918,7 @@ export class APIServer {
   private port: number;
   private policySyncService?: SurgePolicySyncService;
   private onTrafficIngested?: (backendId: number) => void;
+  private onBackendDataCleared?: (backendId: number) => void;
 
   constructor(
     port: number, 
@@ -918,12 +926,14 @@ export class APIServer {
     realtimeStore: RealtimeStore,
     policySyncService?: SurgePolicySyncService,
     onTrafficIngested?: (backendId: number) => void,
+    onBackendDataCleared?: (backendId: number) => void,
   ) {
     this.port = port;
     this.db = db;
     this.realtimeStore = realtimeStore;
     this.policySyncService = policySyncService;
     this.onTrafficIngested = onTrafficIngested;
+    this.onBackendDataCleared = onBackendDataCleared;
   }
 
   async start() {
@@ -933,6 +943,7 @@ export class APIServer {
       realtimeStore: this.realtimeStore,
       policySyncService: this.policySyncService,
       onTrafficIngested: this.onTrafficIngested,
+      onBackendDataCleared: this.onBackendDataCleared,
       logger: false,
     });
     return this.app;

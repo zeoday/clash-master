@@ -291,6 +291,8 @@ interface AgentBootstrapInfo {
 
 interface DbStats {
   size: number;
+  sqliteSize: number;
+  clickhouseSize: number;
   totalConnectionsCount: number;
 }
 
@@ -771,7 +773,12 @@ export function BackendConfigDialog({
   const loadDbStats = async () => {
     try {
       const stats = await api.getDbStats();
-      setDbStats(stats);
+      setDbStats({
+        size: stats.size,
+        sqliteSize: stats.sqliteSize ?? stats.size,
+        clickhouseSize: stats.clickhouseSize ?? 0,
+        totalConnectionsCount: stats.totalConnectionsCount,
+      });
     } catch (error) {
       console.error("Failed to load DB stats:", error);
     }
@@ -2288,6 +2295,14 @@ export function BackendConfigDialog({
                       </div>
                       <div className="text-lg font-semibold">
                         {dbStats ? formatBytes(dbStats.size) : "--"}
+                      </div>
+                      <div className="text-[11px] text-muted-foreground mt-1">
+                        {dbStats
+                          ? t("dbSizeBreakdown", {
+                              sqlite: formatBytes(dbStats.sqliteSize),
+                              clickhouse: formatBytes(dbStats.clickhouseSize),
+                            })
+                          : "--"}
                       </div>
                     </div>
                     <div className="p-3 rounded-lg bg-muted flex flex-col justify-between h-full">

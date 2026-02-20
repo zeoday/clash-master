@@ -172,8 +172,11 @@ class ClickHouseWriter {
   }
 }
 
-const writer = new ClickHouseWriter();
+let writer: ClickHouseWriter | null = null;
 
 export function getClickHouseWriter(): ClickHouseWriter {
+  if (!writer) {
+    writer = new ClickHouseWriter();
+  }
   return writer;
 }

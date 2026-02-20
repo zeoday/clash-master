@@ -120,6 +120,21 @@ export async function runClickHouseQuery(
   config: ClickHouseConfig,
   query: string,
 ): Promise<void> {
+  await runClickHouseQueryWithResponse(config, query);
+}
+
+export async function runClickHouseTextQuery(
+  config: ClickHouseConfig,
+  query: string,
+): Promise<string> {
+  const response = await runClickHouseQueryWithResponse(config, query);
+  return await response.text();
+}
+
+async function runClickHouseQueryWithResponse(
+  config: ClickHouseConfig,
+  query: string,
+): Promise<Response> {
   const baseUrl = buildBaseUrl(config);
   const authHeader =
     config.password.length > 0
@@ -141,6 +156,8 @@ export async function runClickHouseQuery(
     const body = await response.text();
     throw new Error(`query failed: status=${response.status} body=${body.slice(0, 160)}`);
   }
+
+  return response;
 }
 
 export async function ensureClickHouseSchema(config: ClickHouseConfig): Promise<void> {

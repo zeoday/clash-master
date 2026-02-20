@@ -213,6 +213,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       domain,
       timeRange,
       sourceIP,
+      sourceChain,
     );
   });
 
@@ -242,6 +243,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       timeRange,
       effectiveLimit,
       sourceIP,
+      sourceChain,
     );
   });
 
@@ -269,6 +271,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       ip,
       timeRange,
       sourceIP,
+      sourceChain,
     );
   });
 
@@ -298,6 +301,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       timeRange,
       effectiveLimit,
       sourceIP,
+      sourceChain,
     );
   });
 

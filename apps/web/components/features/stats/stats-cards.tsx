@@ -3,7 +3,7 @@
 import { useRef, useEffect } from "react";
 import { Download, Upload, Globe, Activity, Server, Route } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { motion, useSpring, useTransform, useMotionValue } from "framer-motion";
+import { animate, motion, useTransform, useMotionValue } from "framer-motion";
 import { formatBytes, cn } from "@/lib/utils";
 import type { StatsSummary } from "@neko-master/shared";
 
@@ -16,7 +16,7 @@ interface StatsCardsProps {
 
 // ---------- Animated number display ----------
 
-const springConfig = { stiffness: 80, damping: 20, mass: 0.5 };
+const animationConfig = { duration: 0.45, ease: [0.22, 1, 0.36, 1] as const };
 
 function AnimatedValue({
   value,
@@ -30,18 +30,30 @@ function AnimatedValue({
   title?: string;
 }) {
   const motionValue = useMotionValue(0);
-  const spring = useSpring(motionValue, springConfig);
-  const display = useTransform(spring, (v) => formatter(Math.round(v)));
+  const display = useTransform(motionValue, (v) => {
+    const safe = Number.isFinite(v) ? Math.max(0, v) : 0;
+    const bounded = Math.min(safe, Number.MAX_SAFE_INTEGER);
+    const rounded = Math.round(bounded);
+    const formatted = formatter(rounded);
+    if (!formatted || formatted.includes("undefined") || formatted.includes("NaN")) {
+      return formatter(0);
+    }
+    return formatted;
+  });
   const isFirstRender = useRef(true);
 
   useEffect(() => {
+    const target = Number.isFinite(value) ? Math.max(0, value) : 0;
+
     if (isFirstRender.current) {
       // Jump to initial value instantly (no animation on mount)
-      motionValue.jump(value);
+      motionValue.jump(target);
       isFirstRender.current = false;
-    } else {
-      motionValue.set(value);
+      return;
     }
+
+    const controls = animate(motionValue, target, animationConfig);
+    return () => controls.stop();
   }, [value, motionValue]);
 
   return (

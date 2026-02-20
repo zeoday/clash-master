@@ -185,6 +185,8 @@ export interface GeoLookupConfig {
 
 const DEFAULT_DB_STATS = {
   size: 0,
+  sqliteSize: 0,
+  clickhouseSize: 0,
   totalConnectionsCount: 0,
 } as const;
 
@@ -551,7 +553,12 @@ export const api = {
   // Database management
   getDbStats: async () => {
     try {
-      return await fetchJson<{ size: number; totalConnectionsCount: number }>(`${API_BASE}/db/stats`);
+      return await fetchJson<{
+        size: number;
+        sqliteSize: number;
+        clickhouseSize: number;
+        totalConnectionsCount: number;
+      }>(`${API_BASE}/db/stats`);
     } catch (error) {
       if (isApiStatus(error, 404)) {
         return { ...DEFAULT_DB_STATS };

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import type { StatsDatabase, GeoLookupConfig, GeoLookupProvider } from "../../db.js";
 import type { RealtimeStore } from "../../realtime.js";
+import { loadClickHouseConfig, runClickHouseQuery, runClickHouseTextQuery } from "../../clickhouse.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -32,12 +33,123 @@ function toGeoLookupResponse(config: GeoLookupConfig) {
   };
 }
 
+function parseNonNegativeIntText(raw: string): number | null {
+  const value = raw.trim();
+  if (!value) return null;
+  if (!/^\d+$/.test(value)) return null;
+
+  try {
+    const bigintValue = BigInt(value);
+    if (bigintValue > BigInt(Number.MAX_SAFE_INTEGER)) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+    return Number(bigintValue);
+  } catch {
+    return null;
+  }
+}
+
+type ClickHouseStorageStats = {
+  trafficRows: number;
+  trafficSize: number;
+  countrySize: number;
+};
+
+function formatUtcMinuteCutoff(days: number): string {
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  return `${cutoff.slice(0, 16).replace("T", " ")}:00`;
+}
+
+async function cleanupClickHouseData(
+  fastify: FastifyInstance,
+  days: number,
+  backendId?: number,
+): Promise<void> {
+  const chConfig = loadClickHouseConfig();
+  if (!chConfig.enabled) return;
+
+  const database = chConfig.database.replace(/'/g, "''");
+  const tables = ["traffic_minute", "country_minute"] as const;
+
+  if (days === 0 && backendId === undefined) {
+    for (const table of tables) {
+      await runClickHouseQuery(chConfig, `TRUNCATE TABLE ${database}.${table}`);
+    }
+    return;
+  }
+
+  const conditions: string[] = [];
+  if (backendId !== undefined) {
+    conditions.push(`backend_id = ${backendId}`);
+  }
+  if (days > 0) {
+    const cutoff = formatUtcMinuteCutoff(days).replace(/'/g, "''");
+    conditions.push(`minute < toDateTime('${cutoff}')`);
+  }
+
+  if (conditions.length === 0) {
+    return;
+  }
+
+  const whereClause = conditions.join(" AND ");
+  for (const table of tables) {
+    await runClickHouseQuery(
+      chConfig,
+      `ALTER TABLE ${database}.${table} DELETE WHERE ${whereClause} SETTINGS mutations_sync = 2`,
+    );
+  }
+}
+
+async function resolveClickHouseStorageStats(
+  fastify: FastifyInstance,
+): Promise<ClickHouseStorageStats | null> {
+  const chConfig = loadClickHouseConfig();
+  if (!chConfig.enabled) {
+    return null;
+  }
+
+  try {
+    const database = chConfig.database.replace(/'/g, "''");
+    const [rowsText, trafficBytesText, countryBytesText] = await Promise.all([
+      runClickHouseTextQuery(
+        chConfig,
+        `SELECT toUInt64(COALESCE(sum(rows), 0)) FROM system.parts WHERE active = 1 AND database = '${database}' AND table = 'traffic_minute'`,
+      ),
+      runClickHouseTextQuery(
+        chConfig,
+        `SELECT toUInt64(COALESCE(sum(bytes_on_disk), 0)) FROM system.parts WHERE active = 1 AND database = '${database}' AND table = 'traffic_minute'`,
+      ),
+      runClickHouseTextQuery(
+        chConfig,
+        `SELECT toUInt64(COALESCE(sum(bytes_on_disk), 0)) FROM system.parts WHERE active = 1 AND database = '${database}' AND table = 'country_minute'`,
+      ),
+    ]);
+
+    return {
+      trafficRows: parseNonNegativeIntText(rowsText) ?? 0,
+      trafficSize: parseNonNegativeIntText(trafficBytesText) ?? 0,
+      countrySize: parseNonNegativeIntText(countryBytesText) ?? 0,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    fastify.log.warn(`[Config] Failed to load ClickHouse storage stats: ${message}`);
+    return null;
+  }
+}
+
 const configController: FastifyPluginAsync = async (fastify: FastifyInstance): Promise<void> => {
   // Compatibility routes: DB management
   fastify.get("/stats", async () => {
+    const sqliteSize = fastify.db.getDatabaseSize();
+    const sqliteCount = fastify.db.getTotalConnectionLogsCount();
+    const chStats = await resolveClickHouseStorageStats(fastify);
+    const clickhouseSize = chStats ? chStats.trafficSize + chStats.countrySize : 0;
+
     return {
-      size: fastify.db.getDatabaseSize(),
-      totalConnectionsCount: fastify.db.getTotalConnectionLogsCount(),
+      size: sqliteSize + clickhouseSize,
+      sqliteSize,
+      clickhouseSize,
+      totalConnectionsCount: chStats ? chStats.trafficRows : sqliteCount,
     };
   });
 
@@ -54,10 +166,19 @@ const configController: FastifyPluginAsync = async (fastify: FastifyInstance): P
       return reply.status(400).send({ error: "Valid days parameter required" });
     }
 
+    try {
+      await cleanupClickHouseData(fastify, days, backendId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      fastify.log.error(`[Config] ClickHouse cleanup failed: ${message}`);
+      return reply.status(500).send({ error: `ClickHouse cleanup failed: ${message}` });
+    }
+
     const result = fastify.db.cleanupOldData(backendId ?? null, days);
+    fastify.db.clearRangeQueryCache(backendId);
 
     if (days === 0) {
-      if (backendId) {
+      if (backendId !== undefined) {
         fastify.realtimeStore.clearBackend(backendId);
       } else {
         const backends = fastify.db.getAllBackends();

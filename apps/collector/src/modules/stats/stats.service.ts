@@ -35,6 +35,7 @@ type RoutedSource = 'clickhouse' | 'sqlite';
 
 export class StatsService {
   private clickHouseReader: ClickHouseReader;
+  private readonly strictStats = process.env.CH_STRICT_STATS === '1';
   private routeMetricsIntervalMs = Math.max(
     1000,
     Number.parseInt(process.env.STATS_ROUTE_METRICS_LOG_INTERVAL_MS || '60000', 10) || 60000,
@@ -56,7 +57,36 @@ export class StatsService {
     );
   }
 
+  private shouldUseClickHouseForOptionalRange(timeRange: TimeRange): boolean {
+    if (!this.clickHouseReader.shouldUse()) {
+      return false;
+    }
+    if (!timeRange.active) {
+      return true;
+    }
+    return this.clickHouseReader.shouldUseForRange(timeRange.start, timeRange.end);
+  }
+
+  private isStrictStatsEnabled(): boolean {
+    return this.strictStats && this.clickHouseReader.shouldUse();
+  }
+
+  private failIfStrictFallback(route: string): void {
+    if (!this.isStrictStatsEnabled()) {
+      return;
+    }
+    throw new Error(
+      `[StatsService] SQLite fallback is disabled by CH_STRICT_STATS=1 (route=${route})`,
+    );
+  }
+
   private recordRoute(route: string, source: RoutedSource): void {
+    if (this.isStrictStatsEnabled() && source === 'sqlite') {
+      throw new Error(
+        `[StatsService] SQLite fallback is disabled by CH_STRICT_STATS=1 (route=${route})`,
+      );
+    }
+
     const existing = this.routeMetrics[route] || { clickhouse: 0, sqlite: 0 };
     existing[source] += 1;
     this.routeMetrics[route] = existing;
@@ -219,11 +249,20 @@ export class StatsService {
       this.clickHouseReader.shouldUseForRange(timeRange.start, timeRange.end);
 
     if (!shouldUseCH || !timeRange.start || !timeRange.end) {
+      this.failIfStrictFallback('summary');
       this.recordRoute('summary', 'sqlite');
       return this.getSummary(backendId, timeRange);
     }
 
-    const [summaryCH, topDomainsCH, topIPsCH, hourlyStatsCH, trafficInRangeCH] =
+    const [
+      summaryCH,
+      topDomainsCH,
+      topIPsCH,
+      proxyStatsCH,
+      ruleStatsCH,
+      hourlyStatsCH,
+      trafficInRangeCH,
+    ] =
       await Promise.all([
         this.clickHouseReader.getSummary(backendId, timeRange.start, timeRange.end),
         this.clickHouseReader.getTopDomainsLight(
@@ -238,6 +277,8 @@ export class StatsService {
           timeRange.start,
           timeRange.end,
         ),
+        this.clickHouseReader.getProxyStats(backendId, timeRange.start, timeRange.end),
+        this.clickHouseReader.getRuleStats(backendId, timeRange.start, timeRange.end),
         this.clickHouseReader.getHourlyStats(
           backendId,
           24,
@@ -270,12 +311,16 @@ export class StatsService {
       ? this.realtimeStore.mergeTopIPs(backendId, dbTopIPs, 10)
       : dbTopIPs;
 
-    const dbProxyStats = this.db.getProxyStats(backendId, timeRange.start, timeRange.end);
+    const dbProxyStats =
+      proxyStatsCH ||
+      this.db.getProxyStats(backendId, timeRange.start, timeRange.end);
     const proxyStats = includeRealtime
       ? this.realtimeStore.mergeProxyStats(backendId, dbProxyStats)
       : dbProxyStats;
 
-    const dbRuleStats = this.db.getRuleStats(backendId, timeRange.start, timeRange.end);
+    const dbRuleStats =
+      ruleStatsCH ||
+      this.db.getRuleStats(backendId, timeRange.start, timeRange.end);
     const ruleStats = includeRealtime
       ? this.realtimeStore.mergeRuleStats(backendId, dbRuleStats)
       : dbRuleStats;
@@ -290,7 +335,16 @@ export class StatsService {
       ? this.realtimeStore.getTodayDelta(backendId)
       : { upload: 0, download: 0 };
     const usedCH =
-      !!summaryCH || !!topDomainsCH || !!topIPsCH || !!hourlyStatsCH || !!trafficInRangeCH;
+      !!summaryCH ||
+      !!topDomainsCH ||
+      !!topIPsCH ||
+      !!proxyStatsCH ||
+      !!ruleStatsCH ||
+      !!hourlyStatsCH ||
+      !!trafficInRangeCH;
+    if (!usedCH) {
+      this.failIfStrictFallback('summary');
+    }
     this.recordRoute('summary', usedCH ? 'clickhouse' : 'sqlite');
 
     return {
@@ -324,7 +378,17 @@ export class StatsService {
     return this.db.getGlobalSummary();
   }
 
-  getGlobalSummaryWithRouting(): GlobalSummary {
+  async getGlobalSummaryWithRouting(): Promise<GlobalSummary> {
+    if (this.clickHouseReader.shouldUse()) {
+      const backendCount = this.db.getAllBackends().length;
+      const ch = await this.clickHouseReader.getGlobalSummary(backendCount);
+      if (ch) {
+        this.recordRoute('global', 'clickhouse');
+        return ch;
+      }
+    }
+
+    this.failIfStrictFallback('global');
     this.recordRoute('global', 'sqlite');
     return this.db.getGlobalSummary();
   }
@@ -481,6 +545,7 @@ export class StatsService {
     domain: string,
     timeRange: TimeRange,
     sourceIP?: string,
+    sourceChain?: string,
   ): Promise<any[]> {
     const shouldUseCH = this.shouldUseClickHouse(timeRange);
     if (shouldUseCH && timeRange.start && timeRange.end) {
@@ -488,7 +553,7 @@ export class StatsService {
         backendId,
         timeRange.start,
         timeRange.end,
-        { domain, sourceIP },
+        { domain, sourceIP, sourceChain },
       );
       if (ch) {
         this.recordRoute('domains.proxy-stats', 'clickhouse');
@@ -496,7 +561,14 @@ export class StatsService {
       }
     }
     this.recordRoute('domains.proxy-stats', 'sqlite');
-    return this.db.getDomainProxyStats(backendId, domain, timeRange.start, timeRange.end, sourceIP);
+    return this.db.getDomainProxyStats(
+      backendId,
+      domain,
+      timeRange.start,
+      timeRange.end,
+      sourceIP,
+      sourceChain,
+    );
   }
 
   /**
@@ -519,6 +591,7 @@ export class StatsService {
     timeRange: TimeRange,
     limit: number,
     sourceIP?: string,
+    sourceChain?: string,
   ): Promise<IPStats[]> {
     const shouldUseCH = this.shouldUseClickHouse(timeRange);
     if (shouldUseCH && timeRange.start && timeRange.end) {
@@ -527,7 +600,7 @@ export class StatsService {
         timeRange.start,
         timeRange.end,
         limit,
-        { domain, sourceIP },
+        { domain, sourceIP, sourceChain },
       );
       if (ch) {
         this.recordRoute('domains.ip-details', 'clickhouse');
@@ -535,7 +608,15 @@ export class StatsService {
       }
     }
     this.recordRoute('domains.ip-details', 'sqlite');
-    return this.db.getDomainIPDetails(backendId, domain, timeRange.start, timeRange.end, limit, sourceIP);
+    return this.db.getDomainIPDetails(
+      backendId,
+      domain,
+      timeRange.start,
+      timeRange.end,
+      limit,
+      sourceIP,
+      sourceChain,
+    );
   }
 
   /**
@@ -556,6 +637,7 @@ export class StatsService {
     ip: string,
     timeRange: TimeRange,
     sourceIP?: string,
+    sourceChain?: string,
   ): Promise<any[]> {
     const shouldUseCH = this.shouldUseClickHouse(timeRange);
     if (shouldUseCH && timeRange.start && timeRange.end) {
@@ -563,7 +645,7 @@ export class StatsService {
         backendId,
         timeRange.start,
         timeRange.end,
-        { ip, sourceIP },
+        { ip, sourceIP, sourceChain },
       );
       if (ch) {
         this.recordRoute('ips.proxy-stats', 'clickhouse');
@@ -571,7 +653,14 @@ export class StatsService {
       }
     }
     this.recordRoute('ips.proxy-stats', 'sqlite');
-    return this.db.getIPProxyStats(backendId, ip, timeRange.start, timeRange.end, sourceIP);
+    return this.db.getIPProxyStats(
+      backendId,
+      ip,
+      timeRange.start,
+      timeRange.end,
+      sourceIP,
+      sourceChain,
+    );
   }
 
   /**
@@ -594,6 +683,7 @@ export class StatsService {
     timeRange: TimeRange,
     limit: number,
     sourceIP?: string,
+    sourceChain?: string,
   ): Promise<DomainStats[]> {
     const shouldUseCH = this.shouldUseClickHouse(timeRange);
     if (shouldUseCH && timeRange.start && timeRange.end) {
@@ -602,7 +692,7 @@ export class StatsService {
         timeRange.start,
         timeRange.end,
         limit,
-        { ip, sourceIP },
+        { ip, sourceIP, sourceChain },
       );
       if (ch) {
         this.recordRoute('ips.domain-details', 'clickhouse');
@@ -610,7 +700,15 @@ export class StatsService {
       }
     }
     this.recordRoute('ips.domain-details', 'sqlite');
-    return this.db.getIPDomainDetails(backendId, ip, timeRange.start, timeRange.end, limit, sourceIP);
+    return this.db.getIPDomainDetails(
+      backendId,
+      ip,
+      timeRange.start,
+      timeRange.end,
+      limit,
+      sourceIP,
+      sourceChain,
+    );
   }
 
   /**
@@ -960,7 +1058,26 @@ export class StatsService {
     return this.db.getRuleChainFlow(backendId, rule, timeRange.start, timeRange.end);
   }
 
-  getRuleChainFlowWithRouting(backendId: number, rule: string, timeRange: TimeRange): any {
+  async getRuleChainFlowWithRouting(
+    backendId: number,
+    rule: string,
+    timeRange: TimeRange,
+  ): Promise<any> {
+    const shouldUseCH = this.shouldUseClickHouseForOptionalRange(timeRange);
+    if (shouldUseCH) {
+      const ch = await this.clickHouseReader.getRuleChainFlow(
+        backendId,
+        rule,
+        timeRange.start,
+        timeRange.end,
+      );
+      if (ch) {
+        this.recordRoute('rules.chain-flow', 'clickhouse');
+        return ch;
+      }
+    }
+
+    this.failIfStrictFallback('rules.chain-flow');
     this.recordRoute('rules.chain-flow', 'sqlite');
     return this.db.getRuleChainFlow(backendId, rule, timeRange.start, timeRange.end);
   }
@@ -972,7 +1089,24 @@ export class StatsService {
     return this.db.getAllRuleChainFlows(backendId, timeRange.start, timeRange.end);
   }
 
-  getAllRuleChainFlowsWithRouting(backendId: number, timeRange: TimeRange): any {
+  async getAllRuleChainFlowsWithRouting(
+    backendId: number,
+    timeRange: TimeRange,
+  ): Promise<any> {
+    const shouldUseCH = this.shouldUseClickHouseForOptionalRange(timeRange);
+    if (shouldUseCH) {
+      const ch = await this.clickHouseReader.getAllRuleChainFlows(
+        backendId,
+        timeRange.start,
+        timeRange.end,
+      );
+      if (ch) {
+        this.recordRoute('rules.chain-flow-all', 'clickhouse');
+        return ch;
+      }
+    }
+
+    this.failIfStrictFallback('rules.chain-flow-all');
     this.recordRoute('rules.chain-flow-all', 'sqlite');
     return this.db.getAllRuleChainFlows(backendId, timeRange.start, timeRange.end);
   }
@@ -984,7 +1118,16 @@ export class StatsService {
     return this.db.getRuleProxyMap(backendId);
   }
 
-  getRuleProxyMapWithRouting(backendId: number): any {
+  async getRuleProxyMapWithRouting(backendId: number): Promise<any> {
+    if (this.clickHouseReader.shouldUse()) {
+      const ch = await this.clickHouseReader.getRuleProxyMap(backendId);
+      if (ch) {
+        this.recordRoute('rule-proxy-map', 'clickhouse');
+        return ch;
+      }
+    }
+
+    this.failIfStrictFallback('rule-proxy-map');
     this.recordRoute('rule-proxy-map', 'sqlite');
     return this.db.getRuleProxyMap(backendId);
   }
@@ -1272,6 +1415,12 @@ export class StatsService {
   }
 
   getRecentConnectionsWithRouting(backendId: number, limit: number): any[] {
+    if (this.clickHouseReader.shouldUse()) {
+      this.recordRoute('connections', 'clickhouse');
+      return this.clickHouseReader.getRecentConnections(backendId, limit);
+    }
+
+    this.failIfStrictFallback('connections');
     this.recordRoute('connections', 'sqlite');
     return this.db.getRecentConnections(backendId, limit);
   }

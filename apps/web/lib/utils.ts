@@ -6,16 +6,22 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatBytes(bytes: number, decimals = 2): string {
-  if (!Number.isFinite(bytes) || bytes === 0) return "0 B";
-  if (bytes < 0) return `-${formatBytes(-bytes, decimals)}`;
+  const normalizedBytes = Number(bytes);
+  if (!Number.isFinite(normalizedBytes) || normalizedBytes === 0) return "0 B";
+  if (normalizedBytes < 0) return `-${formatBytes(-normalizedBytes, decimals)}`;
 
   const k = 1024;
   const dm = decimals < 0 ? 0 : decimals;
   const sizes = ["B", "KB", "MB", "GB", "TB", "PB"];
 
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const exponent = Math.log(normalizedBytes) / Math.log(k);
+  const rawIndex = Number.isFinite(exponent) ? Math.floor(exponent) : 0;
+  const i = rawIndex < 0 ? 0 : Math.min(rawIndex, sizes.length - 1);
+  const unit = sizes[i] ?? "B";
+  const scaled = normalizedBytes / Math.pow(k, i);
+  const safeScaled = Number.isFinite(scaled) ? scaled : 0;
 
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+  return `${parseFloat(safeScaled.toFixed(dm))} ${unit}`;
 }
 
 export function formatNumber(num: number): string {

@@ -98,7 +98,7 @@ const backendController: FastifyPluginAsync = async (fastify: FastifyInstance): 
       return reply.status(404).send({ error: 'Backend not found' });
     }
     
-    const result = service.deleteBackend(backendId);
+    const result = await service.deleteBackend(backendId);
     return result;
   });
 
@@ -197,7 +197,7 @@ const backendController: FastifyPluginAsync = async (fastify: FastifyInstance): 
       return reply.status(404).send({ error: 'Backend not found' });
     }
     
-    const result = service.clearBackendData(backendId);
+    const result = await service.clearBackendData(backendId);
     return result;
   });
 };

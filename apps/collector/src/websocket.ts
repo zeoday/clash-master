@@ -1304,6 +1304,15 @@ export class StatsWebSocketServer {
     return this.clients.size;
   }
 
+  clearBackendCache(backendId: number): void {
+    const cachePrefix = `${backendId}|`;
+    for (const key of this.baseSummaryCache.keys()) {
+      if (key.startsWith(cachePrefix)) {
+        this.baseSummaryCache.delete(key);
+      }
+    }
+  }
+
   stop() {
     this.clients.forEach((info) => info.ws.close());
     this.clients.clear();

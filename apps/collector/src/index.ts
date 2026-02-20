@@ -83,6 +83,10 @@ async function main() {
     (backendId: number) => {
       wsServer.broadcastStats(backendId);
     },
+    (backendId: number) => {
+      wsServer.clearBackendCache(backendId);
+      wsServer.broadcastStats(backendId, true);
+    },
   );
   apiServer.start();
 

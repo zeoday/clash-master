@@ -185,7 +185,7 @@ export class TrafficWriterRepository extends BaseRepository {
     transaction();
   }
 
-  batchUpdateTrafficStats(backendId: number, updates: TrafficUpdate[]) {
+  batchUpdateTrafficStats(backendId: number, updates: TrafficUpdate[], reduceWrites = false) {
     if (updates.length === 0) return;
 
     const now = new Date();
@@ -420,29 +420,30 @@ export class TrafficWriterRepository extends BaseRepository {
 
     // Sub-transaction 2: Detail tables + minute/hourly tables
     const tx2 = this.db.transaction(() => {
-      const ruleDomainStmt = this.db.prepare(`
-        INSERT INTO rule_domain_traffic (backend_id, rule, domain, total_upload, total_download, total_connections, last_seen)
-        VALUES (@backendId, @rule, @domain, @upload, @download, @count, @timestamp)
-        ON CONFLICT(backend_id, rule, domain) DO UPDATE SET
-          total_upload = total_upload + @upload, total_download = total_download + @download,
-          total_connections = total_connections + @count, last_seen = @timestamp
-      `);
-      for (const [, data] of ruleDomainMap) { ruleDomainStmt.run({ backendId, rule: data.rule, domain: data.domain, upload: data.upload, download: data.download, count: data.count, timestamp }); }
-
-      const ruleIPStmt = this.db.prepare(`
-        INSERT INTO rule_ip_traffic (backend_id, rule, ip, total_upload, total_download, total_connections, last_seen)
-        VALUES (@backendId, @rule, @ip, @upload, @download, @count, @timestamp)
-        ON CONFLICT(backend_id, rule, ip) DO UPDATE SET
-          total_upload = total_upload + @upload, total_download = total_download + @download,
-          total_connections = total_connections + @count, last_seen = @timestamp
-      `);
-      for (const [, data] of ruleIPMap) { ruleIPStmt.run({ backendId, rule: data.rule, ip: data.ip, upload: data.upload, download: data.download, count: data.count, timestamp }); }
-
       const minuteStmt = this.db.prepare(`
         INSERT INTO minute_stats (backend_id, minute, upload, download, connections) VALUES (@backendId, @minute, @upload, @download, @connections)
         ON CONFLICT(backend_id, minute) DO UPDATE SET upload = upload + @upload, download = download + @download, connections = connections + @connections
       `);
       for (const [minute, data] of minuteMap) { minuteStmt.run({ backendId, minute, upload: data.upload, download: data.download, connections: data.connections }); }
+
+      if (!reduceWrites) {
+        const ruleDomainStmt = this.db.prepare(`
+          INSERT INTO rule_domain_traffic (backend_id, rule, domain, total_upload, total_download, total_connections, last_seen)
+          VALUES (@backendId, @rule, @domain, @upload, @download, @count, @timestamp)
+          ON CONFLICT(backend_id, rule, domain) DO UPDATE SET
+            total_upload = total_upload + @upload, total_download = total_download + @download,
+            total_connections = total_connections + @count, last_seen = @timestamp
+        `);
+        for (const [, data] of ruleDomainMap) { ruleDomainStmt.run({ backendId, rule: data.rule, domain: data.domain, upload: data.upload, download: data.download, count: data.count, timestamp }); }
+
+        const ruleIPStmt = this.db.prepare(`
+          INSERT INTO rule_ip_traffic (backend_id, rule, ip, total_upload, total_download, total_connections, last_seen)
+          VALUES (@backendId, @rule, @ip, @upload, @download, @count, @timestamp)
+          ON CONFLICT(backend_id, rule, ip) DO UPDATE SET
+            total_upload = total_upload + @upload, total_download = total_download + @download,
+            total_connections = total_connections + @count, last_seen = @timestamp
+        `);
+        for (const [, data] of ruleIPMap) { ruleIPStmt.run({ backendId, rule: data.rule, ip: data.ip, upload: data.upload, download: data.download, count: data.count, timestamp }); }
 
       const minuteDimStmt = this.db.prepare(`
         INSERT INTO minute_dim_stats (backend_id, minute, domain, ip, source_ip, chain, rule, upload, download, connections)
@@ -490,11 +491,13 @@ export class TrafficWriterRepository extends BaseRepository {
           for (const domain of data.domains) { ipProxyDomainStmt.run({ backendId, ip: data.ip, chain: data.chain, domain }); }
         }
       }
+      }
     });
     tx2();
 
     // Sub-transaction 3: Device tables
-    const tx3 = this.db.transaction(() => {
+    if (!reduceWrites) {
+      const tx3 = this.db.transaction(() => {
       const deviceStmt = this.db.prepare(`
         INSERT INTO device_stats (backend_id, source_ip, total_upload, total_download, total_connections, last_seen)
         VALUES (@backendId, @sourceIP, @upload, @download, @count, @timestamp)
@@ -521,7 +524,8 @@ export class TrafficWriterRepository extends BaseRepository {
           total_connections = total_connections + @count, last_seen = @timestamp
       `);
       for (const [, data] of deviceIPMap) { deviceIPStmt.run({ backendId, sourceIP: data.sourceIP, ip: data.ip, upload: data.upload, download: data.download, count: data.count, timestamp }); }
-    });
-    tx3();
+      });
+      tx3();
+    }
   }
 }

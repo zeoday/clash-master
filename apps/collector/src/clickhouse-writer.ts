@@ -22,8 +22,13 @@ class ClickHouseWriter {
     10,
     Number.parseInt(process.env.CH_WRITE_MAX_PENDING_BATCHES || '200', 10) || 200,
   );
+  private readonly maxPendingRows = Math.max(
+    1000,
+    Number.parseInt(process.env.CH_WRITE_MAX_PENDING_ROWS || '200000', 10) || 200000,
+  );
   private writeChain: Promise<void> = Promise.resolve();
   private pendingBatches = 0;
+  private pendingRows = 0;
   private metricsWindowStartedAt = Date.now();
   private metrics = {
     trafficBatches: 0,
@@ -58,7 +63,7 @@ class ClickHouseWriter {
       connections: 1,
     }));
 
-    this.enqueue(() => this.insertRows('traffic_minute', rows, 'traffic'));
+    this.enqueue(() => this.insertRows('traffic_minute', rows, 'traffic'), rows.length);
   }
 
   writeCountryBatch(backendId: number, updates: CountryMinuteUpdate[]): void {
@@ -75,20 +80,25 @@ class ClickHouseWriter {
       connections: 1,
     }));
 
-    this.enqueue(() => this.insertRows('country_minute', rows, 'country'));
+    this.enqueue(() => this.insertRows('country_minute', rows, 'country'), rows.length);
   }
 
-  private enqueue(task: () => Promise<void>): void {
-    if (this.pendingBatches >= this.maxPendingBatches) {
+  private enqueue(task: () => Promise<void>, rowCount: number): void {
+    const safeRowCount = Math.max(0, rowCount);
+    if (
+      this.pendingBatches >= this.maxPendingBatches ||
+      this.pendingRows + safeRowCount > this.maxPendingRows
+    ) {
       this.metrics.failures += 1;
       this.maybeLogMetrics();
       console.warn(
-        `[ClickHouse Writer] Dropped batch because pending queue is full (${this.pendingBatches}/${this.maxPendingBatches})`,
+        `[ClickHouse Writer] Dropped batch because pending queue is full (batches=${this.pendingBatches}/${this.maxPendingBatches}, rows=${this.pendingRows}/${this.maxPendingRows})`,
       );
       return;
     }
 
     this.pendingBatches += 1;
+    this.pendingRows += safeRowCount;
     this.writeChain = this.writeChain
       .then(() => task())
       .catch((error) => {
@@ -97,6 +107,7 @@ class ClickHouseWriter {
       })
       .finally(() => {
         this.pendingBatches = Math.max(0, this.pendingBatches - 1);
+        this.pendingRows = Math.max(0, this.pendingRows - safeRowCount);
       });
   }
 
@@ -158,7 +169,7 @@ class ClickHouseWriter {
 
     const elapsedSec = Math.max(1, elapsedMs / 1000);
     console.info(
-      `[ClickHouse Writer] traffic_batches=${this.metrics.trafficBatches} traffic_rows=${this.metrics.trafficRows} country_batches=${this.metrics.countryBatches} country_rows=${this.metrics.countryRows} failures=${this.metrics.failures} pending_batches=${this.pendingBatches} rows_per_sec=${((this.metrics.trafficRows + this.metrics.countryRows) / elapsedSec).toFixed(1)} window_sec=${elapsedSec.toFixed(1)}`,
+      `[ClickHouse Writer] traffic_batches=${this.metrics.trafficBatches} traffic_rows=${this.metrics.trafficRows} country_batches=${this.metrics.countryBatches} country_rows=${this.metrics.countryRows} failures=${this.metrics.failures} pending_batches=${this.pendingBatches} pending_rows=${this.pendingRows} rows_per_sec=${((this.metrics.trafficRows + this.metrics.countryRows) / elapsedSec).toFixed(1)} window_sec=${elapsedSec.toFixed(1)}`,
     );
 
     this.metricsWindowStartedAt = now;

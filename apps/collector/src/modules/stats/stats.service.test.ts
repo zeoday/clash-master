@@ -202,4 +202,79 @@ describe('StatsService', () => {
       })).toBe(false);
     });
   });
+
+  describe('strict mode routing', () => {
+    it('should use clickhouse for aggregated trend when range is inactive', async () => {
+      const prevStrict = process.env.CH_STRICT_STATS;
+      process.env.CH_STRICT_STATS = '1';
+
+      try {
+        const strictService = new StatsService(db, realtimeStore) as any;
+        strictService.clickHouseReader = {
+          shouldUse: () => true,
+          shouldUseForRange: () => true,
+          getTrafficTrendAggregated: async (
+            _backendId: number,
+            _bucketMinutes: number,
+            start: string,
+            end: string,
+          ) => ([
+            { time: start, upload: 1, download: 2 },
+            { time: end, upload: 3, download: 4 },
+          ]),
+        };
+
+        const result = await strictService.getTrafficTrendAggregatedWithRouting(
+          backendId,
+          { active: false },
+          30,
+          1,
+        );
+
+        expect(result.length).toBeGreaterThan(0);
+      } finally {
+        if (prevStrict === undefined) {
+          delete process.env.CH_STRICT_STATS;
+        } else {
+          process.env.CH_STRICT_STATS = prevStrict;
+        }
+      }
+    });
+  });
+
+  describe('summary routing consistency', () => {
+    it('should fallback the whole summary response to sqlite when clickhouse results are partial', async () => {
+      seedTraffic();
+
+      const now = Date.now();
+      const partialService = new StatsService(db, realtimeStore) as any;
+      partialService.clickHouseReader = {
+        shouldUseForRange: () => true,
+        getSummary: async () => ({
+          totalConnections: 999999,
+          totalUpload: 999999,
+          totalDownload: 999999,
+          uniqueDomains: 999999,
+          uniqueIPs: 999999,
+        }),
+        getTopDomainsLight: async () => null,
+        getTopIPsLight: async () => [],
+        getProxyStats: async () => [],
+        getRuleStats: async () => [],
+        getHourlyStats: async () => [],
+        getTrafficInRange: async () => ({ upload: 999999, download: 999999 }),
+      };
+
+      const result = await partialService.getSummaryWithRouting(backendId, {
+        active: true,
+        start: new Date(now - 60_000).toISOString(),
+        end: new Date(now + 60_000).toISOString(),
+      });
+
+      expect(result.totalUpload).toBe(800);
+      expect(result.totalDownload).toBe(5300);
+      expect(result.totalDomains).toBe(3);
+      expect(result.totalIPs).toBe(3);
+    });
+  });
 });

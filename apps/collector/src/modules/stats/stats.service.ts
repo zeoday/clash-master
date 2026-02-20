@@ -67,6 +67,32 @@ export class StatsService {
     return this.clickHouseReader.shouldUseForRange(timeRange.start, timeRange.end);
   }
 
+  private buildRelativeRange(windowMinutes: number): { start: string; end: string } {
+    const safeWindowMinutes = Math.max(1, Math.floor(windowMinutes));
+    const end = new Date();
+    const start = new Date(end.getTime() - safeWindowMinutes * 60_000);
+    return {
+      start: start.toISOString(),
+      end: end.toISOString(),
+    };
+  }
+
+  private resolveQueryRange(
+    timeRange: TimeRange,
+    fallbackWindowMinutes: number,
+  ): { start: string; end: string } | null {
+    if (timeRange.active) {
+      if (!timeRange.start || !timeRange.end) {
+        return null;
+      }
+      return {
+        start: timeRange.start,
+        end: timeRange.end,
+      };
+    }
+    return this.buildRelativeRange(fallbackWindowMinutes);
+  }
+
   private isStrictStatsEnabled(): boolean {
     return this.strictStats && this.clickHouseReader.shouldUse();
   }
@@ -292,60 +318,60 @@ export class StatsService {
         ),
       ]);
 
-    const summary =
-      summaryCH || this.db.getSummary(backendId, timeRange.start, timeRange.end);
+    const allCHReady =
+      !!summaryCH &&
+      !!topDomainsCH &&
+      !!topIPsCH &&
+      !!proxyStatsCH &&
+      !!ruleStatsCH &&
+      !!hourlyStatsCH &&
+      !!trafficInRangeCH;
+    if (!allCHReady) {
+      const hasAnyCH =
+        !!summaryCH ||
+        !!topDomainsCH ||
+        !!topIPsCH ||
+        !!proxyStatsCH ||
+        !!ruleStatsCH ||
+        !!hourlyStatsCH ||
+        !!trafficInRangeCH;
+      if (hasAnyCH) {
+        console.warn(
+          '[StatsService] Partial ClickHouse summary data detected, falling back to SQLite for consistency',
+        );
+      }
+      this.failIfStrictFallback('summary');
+      this.recordRoute('summary', 'sqlite');
+      return this.getSummary(backendId, timeRange);
+    }
+
+    const summary = summaryCH;
     const summaryWithRealtime = includeRealtime
       ? this.realtimeStore.applySummaryDelta(backendId, summary)
       : summary;
 
-    const dbTopDomains =
-      topDomainsCH ||
-      this.db.getTopDomainsLight(backendId, 10, timeRange.start, timeRange.end);
     const topDomains = includeRealtime
-      ? this.realtimeStore.mergeTopDomains(backendId, dbTopDomains, 10)
-      : dbTopDomains;
+      ? this.realtimeStore.mergeTopDomains(backendId, topDomainsCH, 10)
+      : topDomainsCH;
 
-    const dbTopIPs =
-      topIPsCH || this.db.getTopIPsLight(backendId, 10, timeRange.start, timeRange.end);
     const topIPs = includeRealtime
-      ? this.realtimeStore.mergeTopIPs(backendId, dbTopIPs, 10)
-      : dbTopIPs;
+      ? this.realtimeStore.mergeTopIPs(backendId, topIPsCH, 10)
+      : topIPsCH;
 
-    const dbProxyStats =
-      proxyStatsCH ||
-      this.db.getProxyStats(backendId, timeRange.start, timeRange.end);
     const proxyStats = includeRealtime
-      ? this.realtimeStore.mergeProxyStats(backendId, dbProxyStats)
-      : dbProxyStats;
+      ? this.realtimeStore.mergeProxyStats(backendId, proxyStatsCH)
+      : proxyStatsCH;
 
-    const dbRuleStats =
-      ruleStatsCH ||
-      this.db.getRuleStats(backendId, timeRange.start, timeRange.end);
     const ruleStats = includeRealtime
-      ? this.realtimeStore.mergeRuleStats(backendId, dbRuleStats)
-      : dbRuleStats;
+      ? this.realtimeStore.mergeRuleStats(backendId, ruleStatsCH)
+      : ruleStatsCH;
 
-    const hourlyStats =
-      hourlyStatsCH ||
-      this.db.getHourlyStats(backendId, 24, timeRange.start, timeRange.end);
-    const todayTraffic =
-      trafficInRangeCH ||
-      this.db.getTrafficInRange(backendId, timeRange.start, timeRange.end);
+    const hourlyStats = hourlyStatsCH;
+    const todayTraffic = trafficInRangeCH;
     const todayDelta = includeRealtime
       ? this.realtimeStore.getTodayDelta(backendId)
       : { upload: 0, download: 0 };
-    const usedCH =
-      !!summaryCH ||
-      !!topDomainsCH ||
-      !!topIPsCH ||
-      !!proxyStatsCH ||
-      !!ruleStatsCH ||
-      !!hourlyStatsCH ||
-      !!trafficInRangeCH;
-    if (!usedCH) {
-      this.failIfStrictFallback('summary');
-    }
-    this.recordRoute('summary', usedCH ? 'clickhouse' : 'sqlite');
+    this.recordRoute('summary', 'clickhouse');
 
     return {
       backend: {
@@ -1297,21 +1323,24 @@ export class StatsService {
     timeRange: TimeRange,
     hours: number,
   ): Promise<HourlyStats[]> {
+    const queryRange = this.resolveQueryRange(timeRange, Math.max(1, hours) * 60);
     const shouldUseCH =
-      timeRange.active &&
-      this.clickHouseReader.shouldUseForRange(timeRange.start, timeRange.end);
-    if (shouldUseCH && timeRange.start && timeRange.end) {
+      !!queryRange &&
+      this.clickHouseReader.shouldUseForRange(queryRange.start, queryRange.end);
+    if (shouldUseCH && queryRange) {
       const chStats = await this.clickHouseReader.getHourlyStats(
         backendId,
         hours,
-        timeRange.start,
-        timeRange.end,
+        queryRange.start,
+        queryRange.end,
       );
       if (chStats) {
         this.recordRoute('hourly', 'clickhouse');
         return chStats;
       }
     }
+
+    this.failIfStrictFallback('hourly');
     this.recordRoute('hourly', 'sqlite');
     return this.db.getHourlyStats(backendId, hours, timeRange.start, timeRange.end);
   }
@@ -1332,21 +1361,25 @@ export class StatsService {
     timeRange: TimeRange,
     minutes: number,
   ): Promise<TrafficTrendPoint[]> {
+    const queryRange = this.resolveQueryRange(timeRange, Math.max(1, minutes));
     const shouldUseCH =
-      timeRange.active &&
-      this.clickHouseReader.shouldUseForRange(timeRange.start, timeRange.end);
+      !!queryRange &&
+      this.clickHouseReader.shouldUseForRange(queryRange.start, queryRange.end);
 
     const chBase =
-      shouldUseCH && timeRange.start && timeRange.end
+      shouldUseCH && queryRange
         ? await this.clickHouseReader.getTrafficTrend(
             backendId,
-            timeRange.start,
-            timeRange.end,
+            queryRange.start,
+            queryRange.end,
           )
         : null;
     const base =
       chBase ||
       this.db.getTrafficTrend(backendId, minutes, timeRange.start, timeRange.end);
+    if (!chBase) {
+      this.failIfStrictFallback('trend');
+    }
     this.recordRoute('trend', chBase ? 'clickhouse' : 'sqlite');
 
     if (!this.shouldIncludeRealtime(timeRange)) {
@@ -1377,17 +1410,18 @@ export class StatsService {
     minutes: number,
     bucketMinutes: number,
   ): Promise<TrafficTrendPoint[]> {
+    const queryRange = this.resolveQueryRange(timeRange, Math.max(1, minutes));
     const shouldUseCH =
-      timeRange.active &&
-      this.clickHouseReader.shouldUseForRange(timeRange.start, timeRange.end);
+      !!queryRange &&
+      this.clickHouseReader.shouldUseForRange(queryRange.start, queryRange.end);
 
     const chBase =
-      shouldUseCH && timeRange.start && timeRange.end
+      shouldUseCH && queryRange
         ? await this.clickHouseReader.getTrafficTrendAggregated(
             backendId,
             bucketMinutes,
-            timeRange.start,
-            timeRange.end,
+            queryRange.start,
+            queryRange.end,
           )
         : null;
     const base =
@@ -1399,6 +1433,9 @@ export class StatsService {
         timeRange.start,
         timeRange.end,
       );
+    if (!chBase) {
+      this.failIfStrictFallback('trend.aggregated');
+    }
     this.recordRoute('trend.aggregated', chBase ? 'clickhouse' : 'sqlite');
 
     if (!this.shouldIncludeRealtime(timeRange)) {

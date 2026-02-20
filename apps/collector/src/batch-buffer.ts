@@ -7,6 +7,7 @@
 import type { StatsDatabase } from "./db.js";
 import type { GeoIPService } from "./geo-service.js";
 import { getClickHouseWriter } from "./clickhouse-writer.js";
+import { shouldSkipSqliteStatsWrites } from "./stats-write-mode.js";
 
 export interface TrafficUpdate {
   domain: string;
@@ -98,6 +99,9 @@ export class BatchBuffer {
     logPrefix = "Collector",
   ): FlushResult {
     const clickHouseWriter = getClickHouseWriter();
+    const skipSqliteStatsWrites = shouldSkipSqliteStatsWrites(
+      clickHouseWriter.isEnabled(),
+    );
     const updates = Array.from(this.buffer.values());
     const geoResults = [...this.geoQueue];
 
@@ -119,7 +123,10 @@ export class BatchBuffer {
 
     if (updates.length > 0) {
       try {
-        db.batchUpdateTrafficStats(backendId, updates);
+        const reduceSQLiteWrites = clickHouseWriter.isEnabled() && process.env.CH_DISABLE_SQLITE_REDUCTION !== '1';
+        if (!skipSqliteStatsWrites) {
+          db.batchUpdateTrafficStats(backendId, updates, reduceSQLiteWrites);
+        }
         if (clickHouseWriter.isEnabled()) {
           clickHouseWriter.writeTrafficBatch(backendId, updates);
         }
@@ -148,7 +155,9 @@ export class BatchBuffer {
             download: r.download,
             timestampMs: r.timestampMs,
           }));
-        db.batchUpdateCountryStats(backendId, countryUpdates);
+        if (!skipSqliteStatsWrites) {
+          db.batchUpdateCountryStats(backendId, countryUpdates);
+        }
         if (clickHouseWriter.isEnabled()) {
           clickHouseWriter.writeCountryBatch(backendId, countryUpdates);
         }

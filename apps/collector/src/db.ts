@@ -552,7 +552,7 @@ export class StatsDatabase {
 
   // ==================== Traffic Writer ====================
   updateTrafficStats(backendId: number, update: TrafficUpdate) { this.repos.trafficWriter.updateTrafficStats(backendId, update); }
-  batchUpdateTrafficStats(backendId: number, updates: TrafficUpdate[]) { this.repos.trafficWriter.batchUpdateTrafficStats(backendId, updates); }
+  batchUpdateTrafficStats(backendId: number, updates: TrafficUpdate[], reduceWrites = false) { this.repos.trafficWriter.batchUpdateTrafficStats(backendId, updates, reduceWrites); }
 
   // ==================== Domain ====================
   getDomainByName(backendId: number, domain: string) { return this.repos.domain.getDomainByName(backendId, domain); }

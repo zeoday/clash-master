@@ -351,8 +351,8 @@ export class BackendService {
    * Clear all data for a specific backend
    */
   async clearBackendData(id: number): Promise<{ message: string }> {
-    this.db.deleteBackendData(id);
     await this.clearClickHouseBackendData(id);
+    this.db.deleteBackendData(id);
     // Also clear realtime cache
     this.realtimeStore.clearBackend(id);
     this.onBackendDataCleared?.(id);
@@ -377,6 +377,11 @@ export class BackendService {
       console.info(`[BackendService] Cleared ClickHouse stats for backend ${backendId}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (config.required || process.env.CH_STRICT_STATS === '1') {
+        throw new Error(
+          `[BackendService] Failed to clear ClickHouse stats for backend ${backendId}: ${message}`,
+        );
+      }
       console.warn(
         `[BackendService] Failed to clear ClickHouse stats for backend ${backendId}: ${message}`,
       );

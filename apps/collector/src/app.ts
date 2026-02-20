@@ -13,6 +13,8 @@ import type { RealtimeStore } from './realtime.js';
 import { buildGatewayHeaders, getGatewayBaseUrl, isAgentBackendUrl, parseSurgeRule } from '@neko-master/shared';
 import type { TrafficUpdate } from './db.js';
 import { SurgePolicySyncService } from './modules/surge/surge-policy-sync.js';
+import { getClickHouseWriter } from './clickhouse-writer.js';
+import { shouldSkipSqliteStatsWrites } from './stats-write-mode.js';
 
 // Import modules
 import { BackendService, backendController } from './modules/backend/index.js';
@@ -454,7 +456,14 @@ export async function createApp(options: AppOptions) {
       return { success: true, backendId, accepted: 0, dropped: picked.length };
     }
 
-    db.batchUpdateTrafficStats(backendId, updates);
+    const clickHouseWriter = getClickHouseWriter();
+    const skipSqliteStatsWrites = shouldSkipSqliteStatsWrites(clickHouseWriter.isEnabled());
+    if (!skipSqliteStatsWrites) {
+      db.batchUpdateTrafficStats(backendId, updates);
+    }
+    if (clickHouseWriter.isEnabled()) {
+      clickHouseWriter.writeTrafficBatch(backendId, updates);
+    }
     for (const update of updates) {
       realtimeStore.recordTraffic(
         backendId,

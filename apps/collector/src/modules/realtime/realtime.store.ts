@@ -23,6 +23,7 @@ export class RealtimeStore {
   public deviceDomainByBackend = new Map<number, Map<string, Map<string, DomainDelta>>>();
   public deviceIPByBackend = new Map<number, Map<string, Map<string, IPDelta>>>();
   public ruleByBackend = new Map<number, Map<string, RuleDelta>>();
+  public ruleChainByBackend = new Map<number, Map<string, { rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number; lastSeen: string }>>();
   public countryByBackend = new Map<number, Map<string, CountryDelta>>();
   
   private maxMinutes: number;
@@ -287,6 +288,30 @@ export class RealtimeStore {
     ruleDelta.totalConnections += connections;
     ruleDelta.lastSeen = lastSeen;
     ruleMap.set(ruleName, ruleDelta);
+
+    // 8. Rule Chain
+    if (ruleName && fullChain) {
+      let ruleChainMap = this.ruleChainByBackend.get(backendId);
+      if (!ruleChainMap) {
+        ruleChainMap = new Map();
+        this.ruleChainByBackend.set(backendId, ruleChainMap);
+      }
+      
+      const rcKey = `${ruleName}::${fullChain}`;
+      const rcDelta = ruleChainMap.get(rcKey) || {
+        rule: ruleName,
+        chain: fullChain,
+        totalUpload: 0,
+        totalDownload: 0,
+        totalConnections: 0,
+        lastSeen,
+      };
+      rcDelta.totalUpload += meta.upload;
+      rcDelta.totalDownload += meta.download;
+      rcDelta.totalConnections += connections;
+      rcDelta.lastSeen = lastSeen;
+      ruleChainMap.set(rcKey, rcDelta);
+    }
   }
 
   recordCountryTraffic(
@@ -322,6 +347,12 @@ export class RealtimeStore {
     countryDelta.totalConnections += connections;
     countryDelta.lastSeen = lastSeen;
     countryMap.set(key, countryDelta);
+  }
+
+  getRuleChainRows(backendId: number): Array<{ rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number }> {
+    const ruleChainMap = this.ruleChainByBackend.get(backendId);
+    if (!ruleChainMap) return [];
+    return Array.from(ruleChainMap.values()).map(r => ({ ...r }));
   }
 
   getSummaryDelta(backendId: number): SummaryDelta {

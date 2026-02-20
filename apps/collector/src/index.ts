@@ -23,6 +23,7 @@ let wsServer: StatsWebSocketServer;
 
 import { APIServer } from './app.js';
 import { GeoIPService } from './geo-service.js';
+import { StatsService } from './modules/stats/index.js';
 import {
   ensureClickHouseReady,
   ensureClickHouseSchema,
@@ -67,7 +68,8 @@ async function main() {
 
   // Initialize WebSocket server for real-time updates
   console.log('[Main] Starting WebSocket server on port', COLLECTOR_WS_PORT);
-  wsServer = new StatsWebSocketServer(COLLECTOR_WS_PORT, db);
+  const statsService = new StatsService(db, realtimeStore);
+  wsServer = new StatsWebSocketServer(COLLECTOR_WS_PORT, db, statsService);
   wsServer.start();
 
   // Initialize policy sync service

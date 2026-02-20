@@ -1081,7 +1081,8 @@ export class StatsService {
    * Get rule chain flow for a specific rule
    */
   getRuleChainFlow(backendId: number, rule: string, timeRange: TimeRange): any {
-    return this.db.getRuleChainFlow(backendId, rule, timeRange.start, timeRange.end);
+    const realtimeRows = this.shouldIncludeRealtime(timeRange) ? this.realtimeStore.getRuleChainRows(backendId) : undefined;
+    return this.db.getRuleChainFlow(backendId, rule, timeRange.start, timeRange.end, realtimeRows);
   }
 
   async getRuleChainFlowWithRouting(
@@ -1090,12 +1091,15 @@ export class StatsService {
     timeRange: TimeRange,
   ): Promise<any> {
     const shouldUseCH = this.shouldUseClickHouseForOptionalRange(timeRange);
+    const realtimeRows = this.shouldIncludeRealtime(timeRange) ? this.realtimeStore.getRuleChainRows(backendId) : undefined;
+    
     if (shouldUseCH) {
       const ch = await this.clickHouseReader.getRuleChainFlow(
         backendId,
         rule,
         timeRange.start,
         timeRange.end,
+        realtimeRows,
       );
       if (ch) {
         this.recordRoute('rules.chain-flow', 'clickhouse');
@@ -1105,14 +1109,15 @@ export class StatsService {
 
     this.failIfStrictFallback('rules.chain-flow');
     this.recordRoute('rules.chain-flow', 'sqlite');
-    return this.db.getRuleChainFlow(backendId, rule, timeRange.start, timeRange.end);
+    return this.db.getRuleChainFlow(backendId, rule, timeRange.start, timeRange.end, realtimeRows);
   }
 
   /**
    * Get all rule chain flows merged into unified DAG
    */
   getAllRuleChainFlows(backendId: number, timeRange: TimeRange): any {
-    return this.db.getAllRuleChainFlows(backendId, timeRange.start, timeRange.end);
+    const realtimeRows = this.shouldIncludeRealtime(timeRange) ? this.realtimeStore.getRuleChainRows(backendId) : undefined;
+    return this.db.getAllRuleChainFlows(backendId, timeRange.start, timeRange.end, realtimeRows);
   }
 
   async getAllRuleChainFlowsWithRouting(
@@ -1120,11 +1125,14 @@ export class StatsService {
     timeRange: TimeRange,
   ): Promise<any> {
     const shouldUseCH = this.shouldUseClickHouseForOptionalRange(timeRange);
+    const realtimeRows = this.shouldIncludeRealtime(timeRange) ? this.realtimeStore.getRuleChainRows(backendId) : undefined;
+    
     if (shouldUseCH) {
       const ch = await this.clickHouseReader.getAllRuleChainFlows(
         backendId,
         timeRange.start,
         timeRange.end,
+        realtimeRows,
       );
       if (ch) {
         this.recordRoute('rules.chain-flow-all', 'clickhouse');
@@ -1134,7 +1142,7 @@ export class StatsService {
 
     this.failIfStrictFallback('rules.chain-flow-all');
     this.recordRoute('rules.chain-flow-all', 'sqlite');
-    return this.db.getAllRuleChainFlows(backendId, timeRange.start, timeRange.end);
+    return this.db.getAllRuleChainFlows(backendId, timeRange.start, timeRange.end, realtimeRows);
   }
 
   /**

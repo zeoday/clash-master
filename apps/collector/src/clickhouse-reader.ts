@@ -615,9 +615,35 @@ ORDER BY rule ASC
     rule: string,
     start?: string,
     end?: string,
+    realtimeRows?: Array<{ rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>,
   ): Promise<RuleChainFlow | null> {
-    const rows = await this.getRuleChainTrafficRows(backendId, start, end, rule);
-    if (rows === null) return null;
+    const rawRows = await this.getRuleChainTrafficRows(backendId, start, end, rule);
+    if (rawRows === null) return null;
+    const rows = [...rawRows];
+
+    if (realtimeRows) {
+      for (const rt of realtimeRows) {
+        if (rt.rule !== rule) continue;
+        const index = rows.findIndex((r) => r.chain === rt.chain);
+        if (index >= 0) {
+          rows[index].totalUpload += rt.totalUpload;
+          rows[index].totalDownload += rt.totalDownload;
+          rows[index].totalConnections += rt.totalConnections;
+        } else {
+          rows.push({
+            rule: rt.rule,
+            chain: rt.chain,
+            totalUpload: rt.totalUpload,
+            totalDownload: rt.totalDownload,
+            totalConnections: rt.totalConnections,
+          });
+        }
+      }
+    }
+
+    if (rows.length === 0) {
+      return { nodes: [], links: [] };
+    }
 
     const nodeMap = new Map<
       string,
@@ -676,9 +702,34 @@ ORDER BY rule ASC
     backendId: number,
     start?: string,
     end?: string,
+    realtimeRows?: Array<{ rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>,
   ): Promise<RuleChainFlowAll | null> {
-    const rows = await this.getRuleChainTrafficRows(backendId, start, end);
-    if (rows === null) return null;
+    const rawRows = await this.getRuleChainTrafficRows(backendId, start, end);
+    if (rawRows === null) return null;
+    const rows = [...rawRows];
+
+    if (realtimeRows) {
+      for (const rt of realtimeRows) {
+        const index = rows.findIndex((r) => r.rule === rt.rule && r.chain === rt.chain);
+        if (index >= 0) {
+          rows[index].totalUpload += rt.totalUpload;
+          rows[index].totalDownload += rt.totalDownload;
+          rows[index].totalConnections += rt.totalConnections;
+        } else {
+          rows.push({
+            rule: rt.rule,
+            chain: rt.chain,
+            totalUpload: rt.totalUpload,
+            totalDownload: rt.totalDownload,
+            totalConnections: rt.totalConnections,
+          });
+        }
+      }
+    }
+
+    if (rows.length === 0) {
+      return { nodes: [], links: [], rulePaths: {}, maxLayer: 0 };
+    }
 
     const nodeMap = new Map<
       string,

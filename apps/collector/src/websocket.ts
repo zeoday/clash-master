@@ -1,7 +1,7 @@
 import { WebSocketServer as WSServer, WebSocket } from 'ws';
 import type { StatsSummary, DomainStats, IPStats, ProxyStats, CountryStats, DeviceStats, RuleStats, HourlyStats } from '@neko-master/shared';
 import type { StatsDatabase } from './db.js';
-import { realtimeStore } from './realtime.js';
+import type { StatsService } from './modules/stats/stats.service.js';
 import { AuthService } from './modules/auth/auth.service.js';
 import { IncomingMessage } from 'http';
 import { URL } from 'url';
@@ -100,6 +100,7 @@ interface ClientInfo {
 export class StatsWebSocketServer {
   private wss: WSServer | null = null;
   private db: StatsDatabase;
+  private statsService: StatsService;
   private authService: AuthService;
   private clients: Map<WebSocket, ClientInfo> = new Map();
   private port: number;
@@ -140,9 +141,10 @@ export class StatsWebSocketServer {
     broadcastSentClients: 0,
   };
 
-  constructor(port: number, db: StatsDatabase) {
+  constructor(port: number, db: StatsDatabase, statsService: StatsService) {
     this.port = port;
     this.db = db;
+    this.statsService = statsService;
     this.authService = new AuthService(db);
   }
 
@@ -777,7 +779,7 @@ export class StatsWebSocketServer {
     return activeBackend?.id ?? null;
   }
 
-  private getStatsForBackend(
+  private async getStatsForBackend(
     backendId: number | null,
     range: ClientRange,
     trend: ClientTrend,
@@ -787,22 +789,13 @@ export class StatsWebSocketServer {
     includeRuleChainFlow: boolean,
     domainsPage: ClientDomainsPage,
     ipsPage: ClientIPsPage,
-  ): StatsSummary | null {
+    wantsFullSummary = true,
+  ): Promise<StatsSummary | null> {
     this.wsMetrics.getStatsCalls += 1;
     const resolvedBackendId = this.resolveBackendId(backendId);
     if (resolvedBackendId === null) {
       return null;
     }
-
-    const includeRealtime = this.shouldIncludeRealtime(range);
-    const wantsFullSummary =
-      !trend &&
-      !deviceDetail &&
-      !proxyDetail &&
-      !ruleDetail &&
-      !includeRuleChainFlow &&
-      !domainsPage &&
-      !ipsPage;
 
     if (wantsFullSummary) {
       this.wsMetrics.fullSummaryCalls += 1;
@@ -816,29 +809,10 @@ export class StatsWebSocketServer {
     }
 
     const cacheTTL = this.getBaseSummaryCacheTTL(range);
-
-    const summary = wantsFullSummary
-      ? (() => {
-          const baseCacheKey = `${resolvedBackendId}|${range.start || ''}|${range.end || ''}`;
-          const cached = this.baseSummaryCache.get(baseCacheKey);
-          if (cached && Date.now() - cached.ts < cacheTTL) {
-            return cached.summary;
-          }
-          const result = this.db.getSummary(resolvedBackendId, range.start, range.end);
-          return result;
-        })()
-      : {
-          totalUpload: 0,
-          totalDownload: 0,
-          totalConnections: 0,
-          uniqueDomains: 0,
-          uniqueIPs: 0,
-        };
-
-    // Use cached base summary data to avoid repeated expensive DB queries
     const baseCacheKey = `${resolvedBackendId}|${range.start || ''}|${range.end || ''}`;
-    const baseCached = this.baseSummaryCache.get(baseCacheKey);
+    let baseCached = this.baseSummaryCache.get(baseCacheKey);
     const baseCacheValid = baseCached && Date.now() - baseCached.ts < cacheTTL;
+
     if (wantsFullSummary) {
       if (baseCacheValid) {
         this.wsMetrics.baseCacheHit += 1;
@@ -847,77 +821,43 @@ export class StatsWebSocketServer {
       }
     }
 
-    const dbTopDomains = wantsFullSummary
-      ? (baseCacheValid ? baseCached!.topDomains : this.db.getTopDomainsLight(resolvedBackendId, 100, range.start, range.end))
-      : undefined;
-    const topDomains = wantsFullSummary && dbTopDomains
-      ? includeRealtime
-        ? realtimeStore.mergeTopDomains(resolvedBackendId, dbTopDomains, 100)
-        : dbTopDomains
-      : [];
+    const now = new Date();
+    // Default to the year 2000 for "all time" start, and 24 hours into the future for "all time" end
+    // This allows ClickHouse to perform a full-range aggregation without failing over to SQLite
+    const defaultStart = new Date('2000-01-01T00:00:00.000Z').toISOString();
+    const defaultEnd = new Date(now.getTime() + 86400000).toISOString();
+    const timeRange = { 
+      start: range.start || defaultStart, 
+      end: range.end || defaultEnd, 
+      active: true 
+    };
 
-    const dbTopIPs = wantsFullSummary
-      ? (baseCacheValid ? baseCached!.topIPs : this.db.getTopIPsLight(resolvedBackendId, 100, range.start, range.end))
-      : undefined;
-    const topIPs = wantsFullSummary && dbTopIPs
-      ? includeRealtime
-        ? realtimeStore.mergeTopIPs(resolvedBackendId, dbTopIPs, 100)
-        : dbTopIPs
-      : [];
-
-    const dbProxyStats = wantsFullSummary
-      ? (baseCacheValid ? baseCached!.proxyStats : this.db.getProxyStats(resolvedBackendId, range.start, range.end))
-      : undefined;
-    const proxyStats = wantsFullSummary && dbProxyStats
-      ? includeRealtime
-        ? realtimeStore.mergeProxyStats(resolvedBackendId, dbProxyStats)
-        : dbProxyStats
-      : [];
-
-    const dbCountryStats = wantsFullSummary
-      ? (baseCacheValid ? baseCached!.countryStats : this.db.getCountryStats(resolvedBackendId, 50, range.start, range.end))
-      : undefined;
-    const countryStats = wantsFullSummary && dbCountryStats
-      ? includeRealtime
-        ? realtimeStore.mergeCountryStats(resolvedBackendId, dbCountryStats)
-        : dbCountryStats
-      : undefined;
-
-    const dbDeviceStats = wantsFullSummary
-      ? (baseCacheValid ? baseCached!.deviceStats : this.db.getDevices(resolvedBackendId, 50, range.start, range.end))
-      : undefined;
-    const deviceStats = wantsFullSummary && dbDeviceStats
-      ? includeRealtime
-        ? realtimeStore.mergeDeviceStats(resolvedBackendId, dbDeviceStats, 50)
-        : dbDeviceStats
-      : undefined;
-
-    const dbRuleStats = wantsFullSummary
-      ? (baseCacheValid ? baseCached!.ruleStats : this.db.getRuleStats(resolvedBackendId, range.start, range.end))
-      : undefined;
-    const ruleStats = wantsFullSummary && dbRuleStats
-      ? includeRealtime
-        ? realtimeStore.mergeRuleStats(resolvedBackendId, dbRuleStats)
-        : dbRuleStats
-      : undefined;
-    const hourlyStats = wantsFullSummary
-      ? (baseCacheValid ? baseCached!.hourlyStats : this.db.getHourlyStats(resolvedBackendId, 24, range.start, range.end))
-      : [];
-
-    // Update base summary cache for future broadcasts
     if (wantsFullSummary && !baseCacheValid) {
-      this.baseSummaryCache.set(baseCacheKey, {
-        summary,
-        topDomains: dbTopDomains!,
-        topIPs: dbTopIPs!,
-        proxyStats: dbProxyStats!,
-        countryStats: dbCountryStats!,
-        deviceStats: dbDeviceStats!,
-        ruleStats: dbRuleStats!,
-        hourlyStats,
+      const [summaryRes, countryStats, deviceStats] = await Promise.all([
+        this.statsService.getSummaryWithRouting(resolvedBackendId, timeRange),
+        this.statsService.getCountryStatsWithRouting(resolvedBackendId, timeRange, 50),
+        this.statsService.getDeviceStatsWithRouting(resolvedBackendId, timeRange, 50),
+      ]);
+
+      baseCached = {
+        summary: {
+          totalConnections: summaryRes.totalConnections,
+          totalUpload: summaryRes.totalUpload,
+          totalDownload: summaryRes.totalDownload,
+          uniqueDomains: summaryRes.totalDomains,
+          uniqueIPs: summaryRes.totalIPs,
+        },
+        topDomains: summaryRes.topDomains,
+        topIPs: summaryRes.topIPs,
+        proxyStats: summaryRes.proxyStats,
+        ruleStats: summaryRes.ruleStats || [],
+        hourlyStats: summaryRes.hourlyStats,
+        countryStats,
+        deviceStats,
         ts: Date.now(),
-      });
-      // Evict stale entries
+      };
+
+      this.baseSummaryCache.set(baseCacheKey, baseCached);
       for (const [key, val] of this.baseSummaryCache) {
         if (Date.now() - val.ts > cacheTTL * 2) {
           this.baseSummaryCache.delete(key);
@@ -925,178 +865,53 @@ export class StatsWebSocketServer {
       }
     }
 
-    const trendStats = trend
-      ? this.db.getTrafficTrendAggregated(
-          resolvedBackendId,
-          trend.minutes,
-          trend.bucketMinutes,
-          range.start,
-          range.end,
-        )
-      : undefined;
-    const dbDeviceDomains = deviceDetail
-      ? this.db.getDeviceDomains(
-          resolvedBackendId,
-          deviceDetail.sourceIP,
-          deviceDetail.limit,
-          range.start,
-          range.end,
-        )
-      : undefined;
-    const dbDeviceIPs = deviceDetail
-      ? this.db.getDeviceIPs(
-          resolvedBackendId,
-          deviceDetail.sourceIP,
-          deviceDetail.limit,
-          range.start,
-          range.end,
-        )
-      : undefined;
-    const deviceDomains = deviceDetail && dbDeviceDomains
-      ? includeRealtime
-        ? realtimeStore.mergeDeviceDomains(
-            resolvedBackendId,
-            deviceDetail.sourceIP,
-            dbDeviceDomains,
-            deviceDetail.limit,
-          )
-        : dbDeviceDomains
-      : undefined;
-    const deviceIPs = deviceDetail && dbDeviceIPs
-      ? includeRealtime
-        ? realtimeStore.mergeDeviceIPs(
-            resolvedBackendId,
-            deviceDetail.sourceIP,
-            dbDeviceIPs,
-            deviceDetail.limit,
-          )
-        : dbDeviceIPs
-      : undefined;
-    const dbProxyDomains = proxyDetail
-      ? this.db.getProxyDomains(
-          resolvedBackendId,
-          proxyDetail.chain,
-          proxyDetail.limit,
-          range.start,
-          range.end,
-        )
-      : undefined;
-    const dbProxyIPs = proxyDetail
-      ? this.db.getProxyIPs(
-          resolvedBackendId,
-          proxyDetail.chain,
-          proxyDetail.limit,
-          range.start,
-          range.end,
-        )
-      : undefined;
-    const proxyDomains = proxyDetail && dbProxyDomains
-      ? includeRealtime
-        ? realtimeStore.mergeProxyDomains(
-            resolvedBackendId,
-            proxyDetail.chain,
-            dbProxyDomains,
-            proxyDetail.limit,
-          )
-        : dbProxyDomains
-      : undefined;
-    const proxyIPs = proxyDetail && dbProxyIPs
-      ? includeRealtime
-        ? realtimeStore.mergeProxyIPs(
-            resolvedBackendId,
-            proxyDetail.chain,
-            dbProxyIPs,
-            proxyDetail.limit,
-          )
-        : dbProxyIPs
-      : undefined;
-    const dbRuleDomains = ruleDetail
-      ? this.db.getRuleDomains(
-          resolvedBackendId,
-          ruleDetail.rule,
-          ruleDetail.limit,
-          range.start,
-          range.end,
-        )
-      : undefined;
-    const dbRuleIPs = ruleDetail
-      ? this.db.getRuleIPs(
-          resolvedBackendId,
-          ruleDetail.rule,
-          ruleDetail.limit,
-          range.start,
-          range.end,
-        )
-      : undefined;
-    const ruleDomains = ruleDetail && dbRuleDomains
-      ? includeRealtime
-        ? realtimeStore.mergeRuleDomains(
-            resolvedBackendId,
-            ruleDetail.rule,
-            dbRuleDomains,
-            ruleDetail.limit,
-          )
-        : dbRuleDomains
-      : undefined;
-    const ruleIPs = ruleDetail && dbRuleIPs
-      ? includeRealtime
-        ? realtimeStore.mergeRuleIPs(
-            resolvedBackendId,
-            ruleDetail.rule,
-            dbRuleIPs,
-            ruleDetail.limit,
-          )
-        : dbRuleIPs
-      : undefined;
-    const ruleChainFlowAll = includeRuleChainFlow
-      ? this.db.getAllRuleChainFlows(
-          resolvedBackendId,
-          range.start,
-          range.end,
-        )
-      : undefined;
-    const dbDomainsPage = domainsPage
-      ? this.db.getDomainStatsPaginated(resolvedBackendId, {
-          offset: domainsPage.offset,
-          limit: domainsPage.limit,
-          sortBy: domainsPage.sortBy,
-          sortOrder: domainsPage.sortOrder,
-          search: domainsPage.search,
-          start: range.start,
-          end: range.end,
-        })
-      : undefined;
-    const domainsPageData = domainsPage && dbDomainsPage
-      ? includeRealtime
-        ? realtimeStore.mergeDomainStatsPaginated(resolvedBackendId, dbDomainsPage, domainsPage)
-        : dbDomainsPage
-      : undefined;
-    const dbIPsPage = ipsPage
-      ? this.db.getIPStatsPaginated(resolvedBackendId, {
-          offset: ipsPage.offset,
-          limit: ipsPage.limit,
-          sortBy: ipsPage.sortBy,
-          sortOrder: ipsPage.sortOrder,
-          search: ipsPage.search,
-          start: range.start,
-          end: range.end,
-        })
-      : undefined;
-    const ipsPageData = ipsPage && dbIPsPage
-      ? includeRealtime
-        ? realtimeStore.mergeIPStatsPaginated(resolvedBackendId, dbIPsPage, ipsPage)
-        : dbIPsPage
-      : undefined;
-    const mergedTrendStats = trend && trendStats && includeRealtime
-      ? realtimeStore.mergeTrend(
-          resolvedBackendId,
-          trendStats,
-          trend.minutes,
-          trend.bucketMinutes,
-        )
-      : trendStats;
+    const summary = wantsFullSummary ? baseCached!.summary : { totalUpload: 0, totalDownload: 0, totalConnections: 0, uniqueDomains: 0, uniqueIPs: 0 };
+    const topDomains = wantsFullSummary ? baseCached!.topDomains : [];
+    const topIPs = wantsFullSummary ? baseCached!.topIPs : [];
+    const proxyStats = wantsFullSummary ? baseCached!.proxyStats : [];
+    const countryStats = wantsFullSummary ? baseCached!.countryStats : undefined;
+    const deviceStats = wantsFullSummary ? baseCached!.deviceStats : undefined;
+    const ruleStats = wantsFullSummary ? baseCached!.ruleStats : undefined;
+    const hourlyStats = wantsFullSummary ? baseCached!.hourlyStats : [];
 
-    const baseStats: StatsSummary = {
+    const fetches: Promise<void>[] = [];
+    
+    let trendStats: any;
+    if (trend) fetches.push(this.statsService.getTrafficTrendAggregatedWithRouting(resolvedBackendId, timeRange, trend.minutes, trend.bucketMinutes).then((r: any) => { trendStats = r; }));
+    
+    let deviceDomains: any;
+    if (deviceDetail) fetches.push(this.statsService.getDeviceDomainsWithRouting(resolvedBackendId, deviceDetail.sourceIP, timeRange, deviceDetail.limit).then((r: any) => { deviceDomains = r; }));
+
+    let deviceIPs: any;
+    if (deviceDetail) fetches.push(this.statsService.getDeviceIPsWithRouting(resolvedBackendId, deviceDetail.sourceIP, timeRange, deviceDetail.limit).then((r: any) => { deviceIPs = r; }));
+
+    let proxyDomains: any;
+    if (proxyDetail) fetches.push(this.statsService.getProxyDomainsWithRouting(resolvedBackendId, proxyDetail.chain, timeRange, proxyDetail.limit).then((r: any) => { proxyDomains = r; }));
+
+    let proxyIPs: any;
+    if (proxyDetail) fetches.push(this.statsService.getProxyIPsWithRouting(resolvedBackendId, proxyDetail.chain, timeRange, proxyDetail.limit).then((r: any) => { proxyIPs = r; }));
+
+    let ruleDomains: any;
+    if (ruleDetail) fetches.push(this.statsService.getRuleDomainsWithRouting(resolvedBackendId, ruleDetail.rule, timeRange, ruleDetail.limit).then((r: any) => { ruleDomains = r; }));
+
+    let ruleIPs: any;
+    if (ruleDetail) fetches.push(this.statsService.getRuleIPsWithRouting(resolvedBackendId, ruleDetail.rule, timeRange, ruleDetail.limit).then((r: any) => { ruleIPs = r; }));
+
+    let ruleChainFlowAll: any;
+    if (includeRuleChainFlow) fetches.push(this.statsService.getAllRuleChainFlowsWithRouting(resolvedBackendId, timeRange).then((r: any) => { ruleChainFlowAll = r; }));
+
+    let domainsPageData: any;
+    if (domainsPage) fetches.push(this.statsService.getDomainStatsPaginatedWithRouting(resolvedBackendId, timeRange, { offset: domainsPage.offset, limit: domainsPage.limit, sortBy: domainsPage.sortBy, sortOrder: domainsPage.sortOrder, search: domainsPage.search }).then((r: any) => { domainsPageData = r; }));
+
+    let ipsPageData: any;
+    if (ipsPage) fetches.push(this.statsService.getIPStatsPaginatedWithRouting(resolvedBackendId, timeRange, { offset: ipsPage.offset, limit: ipsPage.limit, sortBy: ipsPage.sortBy, sortOrder: ipsPage.sortOrder, search: ipsPage.search }).then((r: any) => { ipsPageData = r; }));
+
+    await Promise.all(fetches);
+
+    // Trend data returned by statsService already includes realtime merge when applicable.
+    const mergedTrendStats = trendStats;
+
+    return {
       totalUpload: summary.totalUpload,
       totalDownload: summary.totalDownload,
       totalConnections: summary.totalConnections,
@@ -1127,20 +942,16 @@ export class StatsWebSocketServer {
       ruleStats,
       hourlyStats,
     };
-
-    return includeRealtime && wantsFullSummary
-      ? realtimeStore.applySummaryDelta(resolvedBackendId, baseStats)
-      : baseStats;
   }
 
-  private sendStatsToClient(ws: WebSocket) {
+  private async sendStatsToClient(ws: WebSocket) {
     if (ws.readyState !== WebSocket.OPEN) return;
 
     const clientInfo = this.clients.get(ws);
     if (!clientInfo) return;
 
     try {
-      const stats = this.getStatsForBackend(
+      const stats = await this.getStatsForBackend(
         clientInfo.backendId,
         clientInfo.range,
         clientInfo.trend,
@@ -1150,10 +961,10 @@ export class StatsWebSocketServer {
         clientInfo.includeRuleChainFlow,
         clientInfo.domainsPage,
         clientInfo.ipsPage,
+        true,
       );
-      if (!stats) {
-        return;
-      }
+
+      if (!stats) return;
 
       const message: WebSocketMessage = {
         type: 'stats',
@@ -1170,6 +981,10 @@ export class StatsWebSocketServer {
 
   // Broadcast stats snapshot to subscribed clients.
   broadcastStats(changedBackendId?: number, force = false) {
+    void this.broadcastStatsInternal(changedBackendId, force);
+  }
+
+  private async broadcastStatsInternal(changedBackendId?: number, force = false): Promise<void> {
     const now = Date.now();
 
     if (!force && now - this.lastBroadcastTime < this.broadcastThrottleMs) {
@@ -1182,8 +997,8 @@ export class StatsWebSocketServer {
     this.wsMetrics.broadcastCalls += 1;
 
     let sentCount = 0;
-    // Cache serialized JSON per unique query combo to avoid repeated JSON.stringify
-    const jsonCache = new Map<string, string | null>();
+    // Cache serialized JSON per unique query combo to avoid repeated stats fetch + JSON.stringify
+    const jsonCache = new Map<string, Promise<string | null>>();
     const ts = new Date().toISOString();
 
     for (const [ws, clientInfo] of this.clients) {
@@ -1225,25 +1040,28 @@ export class StatsWebSocketServer {
           : '';
         const cacheKey = `${resolvedBackendId}|${clientInfo.range.start || ''}|${clientInfo.range.end || ''}|${trendKey}|${deviceDetailKey}|${proxyDetailKey}|${ruleDetailKey}|${ruleChainFlowKey}|${domainsPageKey}|${ipsPageKey}`;
         if (!jsonCache.has(cacheKey)) {
-          const stats = this.getStatsForBackend(
-            resolvedBackendId,
-            clientInfo.range,
-            clientInfo.trend,
-            clientInfo.deviceDetail,
-            clientInfo.proxyDetail,
-            clientInfo.ruleDetail,
-            clientInfo.includeRuleChainFlow,
-            clientInfo.domainsPage,
-            clientInfo.ipsPage,
-          );
-          // Serialize once per unique query; reuse for all clients with same params
           jsonCache.set(
             cacheKey,
-            stats ? JSON.stringify({ type: 'stats', data: stats, timestamp: ts }) : null,
+            this.getStatsForBackend(
+              resolvedBackendId,
+              clientInfo.range,
+              clientInfo.trend,
+              clientInfo.deviceDetail,
+              clientInfo.proxyDetail,
+              clientInfo.ruleDetail,
+              clientInfo.includeRuleChainFlow,
+              clientInfo.domainsPage,
+              clientInfo.ipsPage,
+            ).then((stats) => (
+              stats ? JSON.stringify({ type: 'stats', data: stats, timestamp: ts }) : null
+            )).catch((err) => {
+              console.error('[WebSocket] Error building broadcast payload:', err);
+              return null;
+            }),
           );
         }
 
-        const json = jsonCache.get(cacheKey);
+        const json = await jsonCache.get(cacheKey);
         if (!json) continue;
 
         ws.send(json);

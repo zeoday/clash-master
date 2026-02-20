@@ -216,12 +216,14 @@ export class RealtimeStore {
   private deviceDomainByBackend = new Map<number, Map<string, Map<string, DomainDelta>>>();
   private deviceIPByBackend = new Map<number, Map<string, Map<string, IPDelta>>>();
   private ruleByBackend = new Map<number, Map<string, RuleDelta>>();
+  private ruleChainByBackend = new Map<number, Map<string, { rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number; lastSeen: string }>>();
   private countryByBackend = new Map<number, Map<string, CountryDelta>>();
   private maxMinutes: number;
 
   // Memory bounds: max entries per map before eviction of smallest-traffic entries
   private static readonly MAX_DOMAIN_ENTRIES = 50_000;
   private static readonly MAX_IP_ENTRIES = 50_000;
+  private static readonly MAX_RULE_CHAIN_ENTRIES = 50_000;
   private static readonly MAX_DEVICE_DETAIL_ENTRIES = 10_000;
 
   constructor(maxMinutes = parseInt(process.env.REALTIME_MAX_MINUTES || '180', 10)) {
@@ -456,6 +458,29 @@ export class RealtimeStore {
     ruleDelta.totalConnections += connections;
     ruleDelta.lastSeen = lastSeen;
     ruleMap.set(ruleName, ruleDelta);
+
+    if (ruleName && fullChain) {
+      let ruleChainMap = this.ruleChainByBackend.get(backendId);
+      if (!ruleChainMap) {
+        ruleChainMap = new Map();
+        this.ruleChainByBackend.set(backendId, ruleChainMap);
+      }
+      
+      const rcKey = `${ruleName}::${fullChain}`;
+      const rcDelta = ruleChainMap.get(rcKey) || {
+        rule: ruleName,
+        chain: fullChain,
+        totalUpload: 0,
+        totalDownload: 0,
+        totalConnections: 0,
+        lastSeen,
+      };
+      rcDelta.totalUpload += meta.upload;
+      rcDelta.totalDownload += meta.download;
+      rcDelta.totalConnections += connections;
+      rcDelta.lastSeen = lastSeen;
+      ruleChainMap.set(rcKey, rcDelta);
+    }
   }
 
   recordCountryTraffic(
@@ -491,6 +516,12 @@ export class RealtimeStore {
     countryDelta.totalConnections += connections;
     countryDelta.lastSeen = lastSeen;
     countryMap.set(key, countryDelta);
+  }
+
+  getRuleChainRows(backendId: number): Array<{ rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number }> {
+    const ruleChainMap = this.ruleChainByBackend.get(backendId);
+    if (!ruleChainMap) return [];
+    return Array.from(ruleChainMap.values()).map(r => ({ ...r }));
   }
 
   getSummaryDelta(backendId: number): SummaryDelta {
@@ -1291,6 +1322,7 @@ export class RealtimeStore {
     this.deviceDomainByBackend.delete(backendId);
     this.deviceIPByBackend.delete(backendId);
     this.ruleByBackend.delete(backendId);
+    this.ruleChainByBackend.delete(backendId);
   }
 
   clearCountries(backendId: number): void {
@@ -1343,6 +1375,11 @@ export class RealtimeStore {
 
     const ipMap = this.ipByBackend.get(backendId);
     if (ipMap) this.evictIfNeeded(ipMap, RealtimeStore.MAX_IP_ENTRIES);
+
+    const ruleChainMap = this.ruleChainByBackend.get(backendId);
+    if (ruleChainMap) {
+      this.evictIfNeeded(ruleChainMap, RealtimeStore.MAX_RULE_CHAIN_ENTRIES);
+    }
 
     // Device detail maps (per source IP × domain/IP) can be deeply nested
     const deviceDomainMap = this.deviceDomainByBackend.get(backendId);

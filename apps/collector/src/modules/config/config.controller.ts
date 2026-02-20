@@ -69,15 +69,36 @@ async function cleanupClickHouseData(
   if (!chConfig.enabled) return;
 
   const database = chConfig.database.replace(/'/g, "''");
-  const tables = ["traffic_minute", "country_minute"] as const;
+  const baseTables = ["traffic_minute", "traffic_agg", "traffic_detail", "country_minute"] as const;
+  const bufferDefs = [
+    { name: "traffic_agg_buffer", base: "traffic_agg" },
+    { name: "traffic_detail_buffer", base: "traffic_detail" },
+    { name: "country_buffer", base: "country_minute" },
+  ];
 
   if (days === 0 && backendId === undefined) {
-    for (const table of tables) {
+    // Full wipe: DROP buffers → TRUNCATE base → recreate buffers
+    for (const buf of bufferDefs) {
+      try { await runClickHouseQuery(chConfig, `DROP TABLE IF EXISTS ${database}.${buf.name}`); } catch { /* ignore */ }
+    }
+    for (const table of baseTables) {
       await runClickHouseQuery(chConfig, `TRUNCATE TABLE ${database}.${table}`);
+    }
+    for (const buf of bufferDefs) {
+      try {
+        await runClickHouseQuery(
+          chConfig,
+          `CREATE TABLE IF NOT EXISTS ${database}.${buf.name} AS ${database}.${buf.base}
+ENGINE = Buffer('${database}', '${buf.base}', 4, 10, 60, 100, 10000, 10000, 1000000)`,
+        );
+      } catch { /* ignore */ }
     }
     return;
   }
 
+  // Partial cleanup: delete matching rows from base tables only.
+  // Avoid dropping global buffer tables here, which can affect active writers
+  // from other backends.
   const conditions: string[] = [];
   if (backendId !== undefined) {
     conditions.push(`backend_id = ${backendId}`);
@@ -92,7 +113,7 @@ async function cleanupClickHouseData(
   }
 
   const whereClause = conditions.join(" AND ");
-  for (const table of tables) {
+  for (const table of baseTables) {
     await runClickHouseQuery(
       chConfig,
       `ALTER TABLE ${database}.${table} DELETE WHERE ${whereClause} SETTINGS mutations_sync = 2`,

@@ -19,6 +19,7 @@ import type {
 } from './backend.types.js';
 import { isAgentBackendUrl } from '@neko-master/shared';
 import { loadClickHouseConfig, runClickHouseQuery } from '../../clickhouse.js';
+import type { ClickHouseConfig } from '../../clickhouse.js';
 
 import type { AuthService } from '../auth/auth.service.js';
 
@@ -359,21 +360,61 @@ export class BackendService {
     return { message: 'Backend data cleared successfully' };
   }
 
+  private getClickHouseBaseTables(): readonly string[] {
+    return ['traffic_minute', 'traffic_agg', 'traffic_detail', 'country_minute'] as const;
+  }
+
+  private async deleteClickHouseBackendRows(
+    config: ClickHouseConfig,
+    backendId: number,
+  ): Promise<void> {
+    for (const table of this.getClickHouseBaseTables()) {
+      await runClickHouseQuery(
+        config,
+        `ALTER TABLE ${config.database}.${table} DELETE WHERE backend_id = ${backendId} SETTINGS mutations_sync = 2`,
+      );
+    }
+  }
+
+  private scheduleClickHouseBackendDeleteRetry(
+    config: ClickHouseConfig,
+    backendId: number,
+  ): void {
+    // Buffer tables flush asynchronously (max_time defaults to 60s).
+    // Run one delayed cleanup pass to remove late-flushed rows for this backend.
+    const delayMs = Math.max(
+      30_000,
+      Number.parseInt(process.env.CH_BACKEND_CLEAR_RETRY_DELAY_MS || '70000', 10) || 70_000,
+    );
+    const timer = setTimeout(() => {
+      void this.deleteClickHouseBackendRows(config, backendId)
+        .then(() => {
+          console.info(
+            `[BackendService] Completed delayed ClickHouse cleanup for backend ${backendId}`,
+          );
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(
+            `[BackendService] Delayed ClickHouse cleanup failed for backend ${backendId}: ${message}`,
+          );
+        });
+    }, delayMs);
+    timer.unref?.();
+  }
+
   private async clearClickHouseBackendData(backendId: number): Promise<void> {
     const config = loadClickHouseConfig();
+    console.info(`[BackendService] clearClickHouseBackendData called for backend ${backendId}, CH_ENABLED=${config.enabled}, host=${config.host}:${config.port}`);
     if (!config.enabled) {
+      console.info('[BackendService] ClickHouse not enabled, skipping clear');
       return;
     }
 
     try {
-      await runClickHouseQuery(
-        config,
-        `ALTER TABLE ${config.database}.traffic_minute DELETE WHERE backend_id = ${backendId} SETTINGS mutations_sync = 2`,
-      );
-      await runClickHouseQuery(
-        config,
-        `ALTER TABLE ${config.database}.country_minute DELETE WHERE backend_id = ${backendId} SETTINGS mutations_sync = 2`,
-      );
+      // Do not drop global buffer tables here: that can lose writes for other backends.
+      await this.deleteClickHouseBackendRows(config, backendId);
+      this.scheduleClickHouseBackendDeleteRetry(config, backendId);
       console.info(`[BackendService] Cleared ClickHouse stats for backend ${backendId}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

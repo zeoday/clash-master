@@ -305,6 +305,7 @@ export class RuleRepository extends BaseRepository {
 
   getRuleChainFlow(
     backendId: number, rule: string, start?: string, end?: string,
+    realtimeRows?: Array<{ rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>,
   ): { nodes: Array<{ name: string; totalUpload: number; totalDownload: number; totalConnections: number }>; links: Array<{ source: number; target: number }> } {
     const range = this.parseMinuteRange(start, end);
     let rows: Array<{ chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>;
@@ -337,6 +338,25 @@ export class RuleRepository extends BaseRepository {
         FROM rule_chain_traffic WHERE backend_id = ? AND rule = ?
       `);
       rows = stmt.all(backendId, rule) as typeof rows;
+    }
+
+    if (realtimeRows) {
+      for (const rt of realtimeRows) {
+        if (rt.rule !== rule) continue;
+        const index = rows.findIndex((r) => r.chain === rt.chain);
+        if (index >= 0) {
+          rows[index].totalUpload += rt.totalUpload;
+          rows[index].totalDownload += rt.totalDownload;
+          rows[index].totalConnections += rt.totalConnections;
+        } else {
+          rows.push({
+            chain: rt.chain,
+            totalUpload: rt.totalUpload,
+            totalDownload: rt.totalDownload,
+            totalConnections: rt.totalConnections,
+          });
+        }
+      }
     }
 
     const nodeMap = new Map<string, { name: string; totalUpload: number; totalDownload: number; totalConnections: number }>();
@@ -379,6 +399,7 @@ export class RuleRepository extends BaseRepository {
 
   getAllRuleChainFlows(
     backendId: number, start?: string, end?: string,
+    realtimeRows?: Array<{ rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>,
   ): {
     nodes: Array<{ name: string; layer: number; nodeType: 'rule' | 'group' | 'proxy'; totalUpload: number; totalDownload: number; totalConnections: number; rules: string[] }>;
     links: Array<{ source: number; target: number; rules: string[] }>;
@@ -410,6 +431,25 @@ export class RuleRepository extends BaseRepository {
         FROM rule_chain_traffic WHERE backend_id = ? ORDER BY rule, chain
       `);
       rows = stmt.all(backendId) as typeof rows;
+    }
+
+    if (realtimeRows) {
+      for (const rt of realtimeRows) {
+        const index = rows.findIndex((r) => r.rule === rt.rule && r.chain === rt.chain);
+        if (index >= 0) {
+          rows[index].totalUpload += rt.totalUpload;
+          rows[index].totalDownload += rt.totalDownload;
+          rows[index].totalConnections += rt.totalConnections;
+        } else {
+          rows.push({
+            rule: rt.rule,
+            chain: rt.chain,
+            totalUpload: rt.totalUpload,
+            totalDownload: rt.totalDownload,
+            totalConnections: rt.totalConnections,
+          });
+        }
+      }
     }
 
     const nodeMap = new Map<string, {

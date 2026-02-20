@@ -416,7 +416,31 @@ export class TrafficWriterRepository extends BaseRepository {
       `);
       for (const [, data] of ruleChainMap) { ruleChainStmt.run({ backendId, rule: data.rule, chain: data.chain, upload: data.upload, download: data.download, count: data.count, timestamp }); }
     });
-    tx1();
+    
+    if (!reduceWrites) {
+      tx1();
+    } else {
+      // In reduceWrites mode (ClickHouse enabled), we still need hourly_stats and proxy_stats 
+      // as they are minimal and useful for light queries. We skip domain, IP, and detailed rule maps
+      // to drastically reduce B-tree updates and WAL amplification.
+      const tx1Light = this.db.transaction(() => {
+        const hourlyStmt = this.db.prepare(`
+          INSERT INTO hourly_stats (backend_id, hour, upload, download, connections) VALUES (@backendId, @hour, @upload, @download, @connections)
+          ON CONFLICT(backend_id, hour) DO UPDATE SET upload = upload + @upload, download = download + @download, connections = connections + @connections
+        `);
+        for (const [hour, data] of hourlyMap) { hourlyStmt.run({ backendId, hour, upload: data.upload, download: data.download, connections: data.connections }); }
+
+        const proxyStmt = this.db.prepare(`
+          INSERT INTO proxy_stats (backend_id, chain, total_upload, total_download, total_connections, last_seen)
+          VALUES (@backendId, @chain, @upload, @download, @count, @timestamp)
+          ON CONFLICT(backend_id, chain) DO UPDATE SET
+            total_upload = total_upload + @upload, total_download = total_download + @download,
+            total_connections = total_connections + @count, last_seen = @timestamp
+        `);
+        for (const [chain, data] of chainMap) { proxyStmt.run({ backendId, chain, upload: data.upload, download: data.download, count: data.count, timestamp }); }
+      });
+      tx1Light();
+    }
 
     // Sub-transaction 2: Detail tables + minute/hourly tables
     const tx2 = this.db.transaction(() => {
@@ -445,52 +469,52 @@ export class TrafficWriterRepository extends BaseRepository {
         `);
         for (const [, data] of ruleIPMap) { ruleIPStmt.run({ backendId, rule: data.rule, ip: data.ip, upload: data.upload, download: data.download, count: data.count, timestamp }); }
 
-      const minuteDimStmt = this.db.prepare(`
-        INSERT INTO minute_dim_stats (backend_id, minute, domain, ip, source_ip, chain, rule, upload, download, connections)
-        VALUES (@backendId, @minute, @domain, @ip, @sourceIP, @chain, @rule, @upload, @download, @connections)
-        ON CONFLICT(backend_id, minute, domain, ip, source_ip, chain, rule) DO UPDATE SET
-          upload = upload + @upload, download = download + @download, connections = connections + @connections
-      `);
-      for (const [, data] of minuteDimMap) { minuteDimStmt.run({ backendId, minute: data.minute, domain: data.domain, ip: data.ip, sourceIP: data.sourceIP, chain: data.chain, rule: data.rule, upload: data.upload, download: data.download, connections: data.connections }); }
+        const minuteDimStmt = this.db.prepare(`
+          INSERT INTO minute_dim_stats (backend_id, minute, domain, ip, source_ip, chain, rule, upload, download, connections)
+          VALUES (@backendId, @minute, @domain, @ip, @sourceIP, @chain, @rule, @upload, @download, @connections)
+          ON CONFLICT(backend_id, minute, domain, ip, source_ip, chain, rule) DO UPDATE SET
+            upload = upload + @upload, download = download + @download, connections = connections + @connections
+        `);
+        for (const [, data] of minuteDimMap) { minuteDimStmt.run({ backendId, minute: data.minute, domain: data.domain, ip: data.ip, sourceIP: data.sourceIP, chain: data.chain, rule: data.rule, upload: data.upload, download: data.download, connections: data.connections }); }
 
-      const hourlyDimStmt = this.db.prepare(`
-        INSERT INTO hourly_dim_stats (backend_id, hour, domain, ip, source_ip, chain, rule, upload, download, connections)
-        VALUES (@backendId, @hour, @domain, @ip, @sourceIP, @chain, @rule, @upload, @download, @connections)
-        ON CONFLICT(backend_id, hour, domain, ip, source_ip, chain, rule) DO UPDATE SET
-          upload = upload + @upload, download = download + @download, connections = connections + @connections
-      `);
-      for (const [, data] of hourlyDimMap) { hourlyDimStmt.run({ backendId, hour: data.hour, domain: data.domain, ip: data.ip, sourceIP: data.sourceIP, chain: data.chain, rule: data.rule, upload: data.upload, download: data.download, connections: data.connections }); }
+        const hourlyDimStmt = this.db.prepare(`
+          INSERT INTO hourly_dim_stats (backend_id, hour, domain, ip, source_ip, chain, rule, upload, download, connections)
+          VALUES (@backendId, @hour, @domain, @ip, @sourceIP, @chain, @rule, @upload, @download, @connections)
+          ON CONFLICT(backend_id, hour, domain, ip, source_ip, chain, rule) DO UPDATE SET
+            upload = upload + @upload, download = download + @download, connections = connections + @connections
+        `);
+        for (const [, data] of hourlyDimMap) { hourlyDimStmt.run({ backendId, hour: data.hour, domain: data.domain, ip: data.ip, sourceIP: data.sourceIP, chain: data.chain, rule: data.rule, upload: data.upload, download: data.download, connections: data.connections }); }
 
-      const domainProxyStmt = this.db.prepare(`
-        INSERT INTO domain_proxy_stats (backend_id, domain, chain, total_upload, total_download, total_connections, last_seen)
-        VALUES (@backendId, @domain, @chain, @upload, @download, @count, @timestamp)
-        ON CONFLICT(backend_id, domain, chain) DO UPDATE SET
-          total_upload = total_upload + @upload, total_download = total_download + @download,
-          total_connections = total_connections + @count, last_seen = @timestamp
-      `);
-      for (const [, data] of domainProxyMap) { domainProxyStmt.run({ backendId, domain: data.domain, chain: data.chain, upload: data.upload, download: data.download, count: data.count, timestamp }); }
+        const domainProxyStmt = this.db.prepare(`
+          INSERT INTO domain_proxy_stats (backend_id, domain, chain, total_upload, total_download, total_connections, last_seen)
+          VALUES (@backendId, @domain, @chain, @upload, @download, @count, @timestamp)
+          ON CONFLICT(backend_id, domain, chain) DO UPDATE SET
+            total_upload = total_upload + @upload, total_download = total_download + @download,
+            total_connections = total_connections + @count, last_seen = @timestamp
+        `);
+        for (const [, data] of domainProxyMap) { domainProxyStmt.run({ backendId, domain: data.domain, chain: data.chain, upload: data.upload, download: data.download, count: data.count, timestamp }); }
 
-      const ipProxyStmt = this.db.prepare(`
-        INSERT INTO ip_proxy_stats (backend_id, ip, chain, total_upload, total_download, total_connections, last_seen)
-        VALUES (@backendId, @ip, @chain, @upload, @download, @count, @timestamp)
-        ON CONFLICT(backend_id, ip, chain) DO UPDATE SET
-          total_upload = total_upload + @upload, total_download = total_download + @download,
-          total_connections = total_connections + @count, last_seen = @timestamp
-      `);
-      const ipProxyDomainStmt = this.db.prepare(`
-        UPDATE ip_proxy_stats SET domains = CASE
-          WHEN domains IS NULL OR domains = '' THEN @domain
-          WHEN LENGTH(domains) > 4000 THEN domains
-          WHEN INSTR(',' || domains || ',', ',' || @domain || ',') > 0 THEN domains
-          ELSE domains || ',' || @domain END
-        WHERE backend_id = @backendId AND ip = @ip AND chain = @chain
-      `);
-      for (const [, data] of ipProxyMap) {
-        ipProxyStmt.run({ backendId, ip: data.ip, chain: data.chain, upload: data.upload, download: data.download, count: data.count, timestamp });
-        if (data.domains.size > 0) {
-          for (const domain of data.domains) { ipProxyDomainStmt.run({ backendId, ip: data.ip, chain: data.chain, domain }); }
+        const ipProxyStmt = this.db.prepare(`
+          INSERT INTO ip_proxy_stats (backend_id, ip, chain, total_upload, total_download, total_connections, last_seen)
+          VALUES (@backendId, @ip, @chain, @upload, @download, @count, @timestamp)
+          ON CONFLICT(backend_id, ip, chain) DO UPDATE SET
+            total_upload = total_upload + @upload, total_download = total_download + @download,
+            total_connections = total_connections + @count, last_seen = @timestamp
+        `);
+        const ipProxyDomainStmt = this.db.prepare(`
+          UPDATE ip_proxy_stats SET domains = CASE
+            WHEN domains IS NULL OR domains = '' THEN @domain
+            WHEN LENGTH(domains) > 4000 THEN domains
+            WHEN INSTR(',' || domains || ',', ',' || @domain || ',') > 0 THEN domains
+            ELSE domains || ',' || @domain END
+          WHERE backend_id = @backendId AND ip = @ip AND chain = @chain
+        `);
+        for (const [, data] of ipProxyMap) {
+          ipProxyStmt.run({ backendId, ip: data.ip, chain: data.chain, upload: data.upload, download: data.download, count: data.count, timestamp });
+          if (data.domains.size > 0) {
+            for (const domain of data.domains) { ipProxyDomainStmt.run({ backendId, ip: data.ip, chain: data.chain, domain }); }
+          }
         }
-      }
       }
     });
     tx2();

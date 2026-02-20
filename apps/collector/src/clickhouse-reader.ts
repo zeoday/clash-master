@@ -80,7 +80,7 @@ SELECT
   toUInt64(COALESCE(SUM(connections), 0)) AS totalConnections,
   toUInt64(COALESCE(SUM(upload), 0)) AS totalUpload,
   toUInt64(COALESCE(SUM(download), 0)) AS totalDownload
-FROM ${this.config.database}.traffic_agg
+FROM ${this.config.database}.traffic_agg_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -89,7 +89,7 @@ WHERE backend_id = ${backendId}
 SELECT
   toUInt64(uniqIf(domain, domain != '')) AS uniqueDomains,
   toUInt64(uniqIf(ip, ip != '')) AS uniqueIPs
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -121,7 +121,7 @@ SELECT
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -156,7 +156,7 @@ SELECT
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -189,7 +189,7 @@ SELECT
   toUInt64(SUM(upload)) AS upload,
   toUInt64(SUM(download)) AS download,
   toUInt64(SUM(connections)) AS connections
-FROM ${this.config.database}.traffic_agg
+FROM ${this.config.database}.traffic_agg_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -229,7 +229,7 @@ SELECT
   toUInt64(SUM(upload)) AS totalUpload,
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections
-FROM ${this.config.database}.country_minute
+FROM ${this.config.database}.country_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -257,7 +257,7 @@ LIMIT ${Math.max(1, limit)}
 SELECT
   toUInt64(COALESCE(SUM(upload), 0)) AS upload,
   toUInt64(COALESCE(SUM(download), 0)) AS download
-FROM ${this.config.database}.traffic_agg
+FROM ${this.config.database}.traffic_agg_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -280,7 +280,7 @@ SELECT
   toString(minute) AS time,
   toUInt64(SUM(upload)) AS upload,
   toUInt64(SUM(download)) AS download
-FROM ${this.config.database}.traffic_agg
+FROM ${this.config.database}.traffic_agg_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -312,7 +312,7 @@ SELECT
   toString(${bucketExpr}) AS time,
   toUInt64(SUM(upload)) AS upload,
   toUInt64(SUM(download)) AS download
-FROM ${this.config.database}.traffic_agg
+FROM ${this.config.database}.traffic_agg_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -359,7 +359,7 @@ ORDER BY time ASC
 SELECT toUInt64(COUNT()) AS total
 FROM (
   SELECT domain
-  FROM ${this.config.database}.traffic_detail
+  FROM ${this.config.database}.traffic_detail_buffer
   WHERE backend_id = ${backendId}
     AND minute >= toDateTime('${this.toDateTime(start)}')
     AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -378,7 +378,7 @@ SELECT
   toString(max(minute)) AS lastSeen,
   arrayDistinct(groupArrayIf(rule, rule != '')) AS rules,
   arrayDistinct(groupArrayIf(chain, chain != '')) AS chains
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -436,7 +436,7 @@ LIMIT ${limit} OFFSET ${offset}
 SELECT toUInt64(COUNT()) AS total
 FROM (
   SELECT ip
-  FROM ${this.config.database}.traffic_detail
+  FROM ${this.config.database}.traffic_detail_buffer
   WHERE backend_id = ${backendId}
     AND minute >= toDateTime('${this.toDateTime(start)}')
     AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -454,7 +454,7 @@ SELECT
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen,
   arrayDistinct(groupArrayIf(chain, chain != '')) AS chains
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -491,7 +491,7 @@ SELECT
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -521,7 +521,7 @@ SELECT
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -554,14 +554,14 @@ SELECT
   toUInt64(COALESCE(SUM(connections), 0)) AS totalConnections,
   toUInt64(COALESCE(SUM(upload), 0)) AS totalUpload,
   toUInt64(COALESCE(SUM(download), 0)) AS totalDownload
-FROM ${this.config.database}.traffic_agg
+FROM ${this.config.database}.traffic_agg_buffer
 WHERE minute >= now() - INTERVAL 90 DAY
 `),
       this.query<Record<string, unknown>>(`
 SELECT
   toUInt64(uniqIf(domain, domain != '')) AS uniqueDomains,
   toUInt64(uniqIf(ip, ip != '')) AS uniqueIPs
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE minute >= now() - INTERVAL 90 DAY
 `),
     ]);
@@ -594,7 +594,7 @@ WHERE minute >= now() - INTERVAL 90 DAY
 SELECT
   rule,
   groupUniqArray(arrayElement(splitByString(' > ', chain), 1)) AS proxies
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE backend_id = ${backendId}
   AND rule != ''
   AND chain != ''${timeWhere}
@@ -879,7 +879,7 @@ SELECT
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -923,7 +923,7 @@ SELECT
   toString(max(minute)) AS lastSeen,
   arrayDistinct(groupArrayIf(rule, rule != '')) AS rules,
   arrayDistinct(groupArrayIf(chain, chain != '')) AS chains
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -969,7 +969,7 @@ SELECT
   toUInt64(SUM(connections)) AS totalConnections,
   toString(max(minute)) AS lastSeen,
   arrayDistinct(groupArrayIf(chain, chain != '')) AS chains
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -1010,7 +1010,7 @@ SELECT
   toUInt64(SUM(upload)) AS totalUpload,
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE backend_id = ${backendId}
   AND minute >= toDateTime('${this.toDateTime(start)}')
   AND minute <= toDateTime('${this.toDateTime(end)}')
@@ -1042,7 +1042,7 @@ SELECT
   toUInt64(SUM(upload)) AS totalUpload,
   toUInt64(SUM(download)) AS totalDownload,
   toUInt64(SUM(connections)) AS totalConnections
-FROM ${this.config.database}.traffic_detail
+FROM ${this.config.database}.traffic_detail_buffer
 WHERE backend_id = ${backendId}
   AND rule != ''
   AND chain != ''${timeWhere}${ruleWhere}

@@ -78,10 +78,9 @@ class ClickHouseWriter {
     }
     const aggRows = Array.from(aggMap.values());
 
-    // Write to all three tables: legacy compat + optimised pair
-    this.enqueue(() => this.insertRows('traffic_minute', detailRows, 'traffic'), detailRows.length);
-    this.enqueue(() => this.insertRows('traffic_detail', detailRows, 'traffic'), detailRows.length);
-    this.enqueue(() => this.insertRows('traffic_agg', aggRows, 'traffic'), aggRows.length);
+    // Write to buffer tables — data goes to memory first, auto-flushed to disk every ~60s
+    this.enqueue(() => this.insertRows('traffic_detail_buffer', detailRows, 'traffic'), detailRows.length);
+    this.enqueue(() => this.insertRows('traffic_agg_buffer', aggRows, 'traffic'), aggRows.length);
   }
 
   writeCountryBatch(backendId: number, updates: CountryMinuteUpdate[]): void {
@@ -98,7 +97,7 @@ class ClickHouseWriter {
       connections: 1,
     }));
 
-    this.enqueue(() => this.insertRows('country_minute', rows, 'country'), rows.length);
+    this.enqueue(() => this.insertRows('country_buffer', rows, 'country'), rows.length);
   }
 
   private enqueue(task: () => Promise<void>, rowCount: number): void {
@@ -130,7 +129,7 @@ class ClickHouseWriter {
   }
 
   private async insertRows(
-    table: 'traffic_minute' | 'traffic_agg' | 'traffic_detail' | 'country_minute',
+    table: 'traffic_agg_buffer' | 'traffic_detail_buffer' | 'country_buffer' | 'traffic_minute' | 'traffic_agg' | 'traffic_detail' | 'country_minute',
     rows: Array<Record<string, unknown>>,
     metricType: 'traffic' | 'country',
   ): Promise<void> {

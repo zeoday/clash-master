@@ -636,6 +636,29 @@ export async function createApp(options: AppOptions) {
     return { success: true, backendId, hash: body.config.hash };
   });
 
+  // Agent policy state endpoint (synced more frequently than config)
+  app.post('/api/agent/policy-state', async (request, reply) => {
+    const body = request.body as { backendId: number; agentId: string; policyState: { proxies: Record<string, unknown>; providers: Record<string, unknown>; timestamp: number } };
+    const backendId = parseBackendId(body?.backendId);
+    console.info(`[Agent Policy State] Received policy state for backendId: ${backendId}, agentId: ${body?.agentId}`);
+    if (backendId === null) {
+      return reply.status(400).send({ error: 'Invalid backendId' });
+    }
+    if (!isAgentBackendAuthorized(backendId, request, reply)) {
+      console.info(`[Agent Policy State] Backend not authorized: ${backendId}`);
+      return;
+    }
+
+    if (!body.policyState) {
+      return reply.status(400).send({ error: 'Missing policyState payload' });
+    }
+
+    console.info(`[Agent Policy State] Storing policy state for backendId: ${backendId}, proxies count: ${Object.keys(body.policyState?.proxies || {}).length}`);
+    realtimeStore.setAgentPolicyState(backendId, body.policyState as import('../realtime/realtime.store.js').AgentPolicyState);
+
+    return { success: true, backendId, timestamp: body.policyState.timestamp };
+  });
+
   // Compatibility routes: Gateway APIs
   app.get('/api/gateway/proxies', async (request, reply) => {
     const backendId = getBackendIdFromQuery(request.query as Record<string, unknown>);
@@ -649,7 +672,7 @@ export async function createApp(options: AppOptions) {
       return reply.status(404).send({ error: 'Backend not found' });
     }
     if (isAgentBackendUrl(backend.url)) {
-      const cached = realtimeStore.getAgentConfig(backendId);
+      const cached = realtimeStore.getAgentConfigWithPolicyState(backendId);
       console.info(`[Gateway API /proxies] Agent mode, cached exists: ${!!cached}`);
       if (!cached) {
         return reply.status(503).send({ error: 'Agent config not yet synced' });
@@ -739,7 +762,7 @@ export async function createApp(options: AppOptions) {
       return reply.status(404).send({ error: 'Backend not found' });
     }
     if (isAgentBackendUrl(backend.url)) {
-      const cached = realtimeStore.getAgentConfig(backendId);
+      const cached = realtimeStore.getAgentConfigWithPolicyState(backendId);
       if (!cached) {
         return reply.status(503).send({ error: 'Agent config not yet synced' });
       }
@@ -1029,6 +1052,7 @@ export async function createApp(options: AppOptions) {
       '/api/agent/heartbeat',
       '/api/agent/report',
       '/api/agent/config',
+      '/api/agent/policy-state',
     ];
     
     // Check if route is public

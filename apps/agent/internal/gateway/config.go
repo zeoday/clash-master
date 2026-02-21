@@ -124,6 +124,117 @@ func (c *Client) getClashConfig(ctx context.Context) (*domain.GatewayConfigSnaps
 	return snap, nil
 }
 
+// GetPolicyStateSnapshot returns only the dynamic policy selection state (now field)
+// This is much lighter than GetConfigSnapshot as it doesn't fetch rules
+func (c *Client) GetPolicyStateSnapshot(ctx context.Context) (*domain.PolicyStateSnapshot, error) {
+	if c.gatewayType == "clash" {
+		return c.getClashPolicyState(ctx)
+	}
+	return c.getSurgePolicyState(ctx)
+}
+
+func (c *Client) getSurgePolicyState(ctx context.Context) (*domain.PolicyStateSnapshot, error) {
+	var policiesData struct {
+		PolicyGroups []string `json:"policy-groups"`
+		Proxies      []string `json:"proxies"`
+	}
+	if err := c.getJSON(ctx, "/v1/policies", &policiesData); err != nil {
+		return nil, fmt.Errorf("surge /v1/policies error: %w", err)
+	}
+
+	snap := &domain.PolicyStateSnapshot{
+		Proxies:   make(map[string]domain.GatewayProxy),
+		Providers: make(map[string]domain.GatewayProvider),
+	}
+
+	// Add standalone proxies (no 'now' field for these)
+	for _, p := range policiesData.Proxies {
+		snap.Proxies[p] = domain.GatewayProxy{
+			Name: p,
+			Type: "Proxy",
+		}
+	}
+
+	// Build provider proxies slice for policy groups
+	providerProxies := make([]domain.GatewayProxy, 0, len(policiesData.PolicyGroups))
+
+	// Fetch current selection for each policy group
+	for _, g := range policiesData.PolicyGroups {
+		var groupDetail struct {
+			Type   string `json:"type"`
+			Policy string `json:"policy"`
+		}
+		if err := c.getJSON(ctx, "/v1/policies/"+url.PathEscape(g), &groupDetail); err != nil {
+			fmt.Printf("[agent] warning: failed to get policy detail for %s: %v\n", g, err)
+		}
+		snap.Proxies[g] = domain.GatewayProxy{
+			Name: g,
+			Type: groupDetail.Type,
+			Now:  groupDetail.Policy,
+		}
+		providerProxies = append(providerProxies, domain.GatewayProxy{
+			Name: g,
+			Type: groupDetail.Type,
+			Now:  groupDetail.Policy,
+		})
+	}
+
+	// Create default provider
+	if len(providerProxies) > 0 {
+		snap.Providers["default"] = domain.GatewayProvider{
+			Name:    "default",
+			Type:    "SurgePolicyGroups",
+			Proxies: providerProxies,
+		}
+	}
+
+	return snap, nil
+}
+
+func (c *Client) getClashPolicyState(ctx context.Context) (*domain.PolicyStateSnapshot, error) {
+	var proxiesData struct {
+		Proxies map[string]struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+			Now  string `json:"now"`
+		} `json:"proxies"`
+	}
+	if err := c.getJSON(ctx, "/proxies", &proxiesData); err != nil {
+		return nil, fmt.Errorf("clash /proxies error: %w", err)
+	}
+
+	snap := &domain.PolicyStateSnapshot{
+		Proxies:   make(map[string]domain.GatewayProxy),
+		Providers: make(map[string]domain.GatewayProvider),
+	}
+
+	// Group proxies by type for provider structure
+	providerProxies := make(map[string][]domain.GatewayProxy)
+
+	for name, p := range proxiesData.Proxies {
+		proxy := domain.GatewayProxy{
+			Name: p.Name,
+			Type: p.Type,
+			Now:  p.Now,
+		}
+		snap.Proxies[name] = proxy
+
+		// Group by type for providers
+		providerProxies[p.Type] = append(providerProxies[p.Type], proxy)
+	}
+
+	// Create providers by type
+	for typ, proxies := range providerProxies {
+		snap.Providers[typ] = domain.GatewayProvider{
+			Name:    typ,
+			Type:    typ,
+			Proxies: proxies,
+		}
+	}
+
+	return snap, nil
+}
+
 func parseSurgeRuleForAgent(raw string) domain.GatewayRule {
     // Basic Surge parsing logic. For agent, returning "raw" is often enough as backend parses it.
     // However master expects { type, payload, proxy } if we can parse it.
@@ -178,6 +289,9 @@ func (c *Client) getSurgeConfig(ctx context.Context) (*domain.GatewayConfigSnaps
 		}
 	}
 
+	// Build provider proxies slice for policy groups
+	providerProxies := make([]domain.GatewayProxy, 0, len(policiesData.PolicyGroups))
+	
 	for _, g := range policiesData.PolicyGroups {
 		var groupDetail struct {
 			Type   string `json:"type"`
@@ -191,7 +305,24 @@ func (c *Client) getSurgeConfig(ctx context.Context) (*domain.GatewayConfigSnaps
 			Type: groupDetail.Type,
 			Now:  groupDetail.Policy,
 		}
+		// Also add to provider proxies for frontend compatibility
+		providerProxies = append(providerProxies, domain.GatewayProxy{
+			Name: g,
+			Type: groupDetail.Type,
+			Now:  groupDetail.Policy,
+		})
 		fmt.Printf("[agent] policy group: %s, type: %s, now: %s\n", g, groupDetail.Type, groupDetail.Policy)
+	}
+	
+	// Create a default provider containing all policy groups
+	// This ensures frontend's buildGroupNowMap can find the 'now' values
+	if len(providerProxies) > 0 {
+		snap.Providers["default"] = domain.GatewayProvider{
+			Name:    "default",
+			Type:    "SurgePolicyGroups",
+			Proxies: providerProxies,
+		}
+		fmt.Printf("[agent] created default provider with %d policy groups\n", len(providerProxies))
 	}
 
 	return snap, nil

@@ -50,6 +50,12 @@ type configPayload struct {
 	Config    *domain.GatewayConfigSnapshot `json:"config"`
 }
 
+type policyStatePayload struct {
+	BackendID   int                         `json:"backendId"`
+	AgentID     string                      `json:"agentId"`
+	PolicyState *domain.PolicyStateSnapshot `json:"policyState"`
+}
+
 type Runner struct {
 	cfg           config.Config
 	httpClient    *http.Client
@@ -85,11 +91,12 @@ func (r *Runner) Run(ctx context.Context) {
 	log.Printf("[agent:%s] starting, backend=%d, gateway_type=%s, server=%s", r.cfg.AgentID, r.cfg.BackendID, r.cfg.GatewayType, r.cfg.ServerAPIBase)
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 	go r.runCollectorLoop(ctx, &wg)
 	go r.runReportLoop(ctx, &wg)
 	go r.runHeartbeatLoop(ctx, &wg)
 	go r.runConfigSyncLoop(ctx, &wg)
+	go r.runPolicyStateSyncLoop(ctx, &wg)
 
 	<-ctx.Done()
 	log.Printf("[agent:%s] stopping...", r.cfg.AgentID)
@@ -245,6 +252,56 @@ func (r *Runner) syncConfig(ctx context.Context) error {
 	r.mu.Lock()
 	r.lastConfigHash = hash
 	r.mu.Unlock()
+	return nil
+}
+
+// runPolicyStateSyncLoop syncs only the dynamic policy selection state (now field)
+// This runs more frequently (30s) than config sync (2min) to keep chain flow visualization accurate
+func (r *Runner) runPolicyStateSyncLoop(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	// Wait a bit for initial config sync to complete
+	time.Sleep(5 * time.Second)
+
+	// Initial sync
+	if err := r.syncPolicyState(ctx); err != nil {
+		log.Printf("[agent:%s] init policy state sync error: %v", r.cfg.AgentID, err)
+	}
+
+	// Then every 30 seconds
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := r.syncPolicyState(ctx); err != nil {
+				log.Printf("[agent:%s] policy state sync error: %v", r.cfg.AgentID, err)
+			}
+		}
+	}
+}
+
+func (r *Runner) syncPolicyState(ctx context.Context) error {
+	snap, err := r.gatewayClient.GetPolicyStateSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+
+	snap.Timestamp = time.Now().UnixMilli()
+
+	payload := policyStatePayload{
+		BackendID:   r.cfg.BackendID,
+		AgentID:     r.cfg.AgentID,
+		PolicyState: snap,
+	}
+
+	if err := r.postJSON(ctx, "/agent/policy-state", payload); err != nil {
+		return err
+	}
+
 	return nil
 }
 

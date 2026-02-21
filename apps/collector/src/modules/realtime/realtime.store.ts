@@ -214,8 +214,16 @@ export type AgentGatewayConfig = {
   hash: string;
 };
 
+// Policy state is synced more frequently (30s) than full config (2min)
+export type AgentPolicyState = {
+  proxies: Record<string, { name: string; type: string; now?: string }>;
+  providers: Record<string, { proxies: Array<{ name: string; type: string; now?: string }> }>;
+  timestamp: number;
+};
+
 export class RealtimeStore {
   private agentConfigByBackend = new Map<number, AgentGatewayConfig>();
+  private agentPolicyStateByBackend = new Map<number, AgentPolicyState>();
   public summaryByBackend = new Map<number, SummaryDelta>();
   public minuteByBackend = new Map<number, Map<string, MinuteBucket>>();
   public domainByBackend = new Map<number, Map<string, DomainDelta>>();
@@ -245,6 +253,30 @@ export class RealtimeStore {
 
   getAgentConfig(backendId: number): AgentGatewayConfig | undefined {
     return this.agentConfigByBackend.get(backendId);
+  }
+
+  setAgentPolicyState(backendId: number, state: AgentPolicyState): void {
+    this.agentPolicyStateByBackend.set(backendId, state);
+  }
+
+  getAgentPolicyState(backendId: number): AgentPolicyState | undefined {
+    return this.agentPolicyStateByBackend.get(backendId);
+  }
+
+  // Get merged agent config with latest policy state
+  getAgentConfigWithPolicyState(backendId: number): AgentGatewayConfig | undefined {
+    const config = this.agentConfigByBackend.get(backendId);
+    const policyState = this.agentPolicyStateByBackend.get(backendId);
+    
+    if (!config) return undefined;
+    if (!policyState) return config;
+    
+    // Merge policy state into config (policy state is more recent)
+    return {
+      ...config,
+      proxies: policyState.proxies,
+      providers: policyState.providers,
+    };
   }
 
   recordTraffic(

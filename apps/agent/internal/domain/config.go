@@ -26,3 +26,11 @@ type GatewayConfigSnapshot struct {
 	Timestamp int64                      `json:"timestamp"`
 	Hash      string                     `json:"hash"`
 }
+
+// PolicyStateSnapshot contains only the dynamic policy selection state (now field)
+// This is used for frequent syncs without re-fetching static rules
+type PolicyStateSnapshot struct {
+	Proxies   map[string]GatewayProxy    `json:"proxies"`
+	Providers map[string]GatewayProvider `json:"providers"`
+	Timestamp int64                      `json:"timestamp"`
+}

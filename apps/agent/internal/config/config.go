@@ -1,10 +1,11 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 )
@@ -42,7 +43,7 @@ func Parse(args []string) (Config, error) {
 	serverURL := fs.String("server-url", "", "Neko Master server URL, e.g. https://neko.example.com")
 	backendID := fs.Int("backend-id", 0, "Backend ID configured in Neko Master")
 	backendToken := fs.String("backend-token", "", "Backend token for agent authentication")
-	agentID := fs.String("agent-id", "", "Agent ID (optional, defaults to hostname-pid)")
+	agentID := fs.String("agent-id", "", "Agent ID (optional, auto-generated from backend-token if not provided)")
 	gatewayType := fs.String("gateway-type", "clash", "Gateway type: clash or surge")
 	gatewayURL := fs.String("gateway-url", "", "Gateway control endpoint URL")
 	gatewayToken := fs.String("gateway-token", "", "Gateway secret token (optional)")
@@ -88,13 +89,16 @@ func Parse(args []string) (Config, error) {
 		return Config{}, errors.New("report-batch-size and max-pending-updates must be positive")
 	}
 
-	hostname, _ := os.Hostname()
-	if hostname == "" {
-		hostname = "agent"
-	}
+	// Generate stable agent ID based on backend token
+	// This ensures the same agent always uses the same ID across restarts
+	backendTokenTrimmed := strings.TrimSpace(*backendToken)
 	finalAgentID := strings.TrimSpace(*agentID)
 	if finalAgentID == "" {
-		finalAgentID = fmt.Sprintf("%s-%d", sanitizeID(hostname), os.Getpid())
+		// Use first 16 chars of backend token hash as agent ID
+		// This is stable across restarts and unique per backend
+		hash := sha256.Sum256([]byte(backendTokenTrimmed))
+		hashStr := hex.EncodeToString(hash[:])
+		finalAgentID = "agent-" + hashStr[:16]
 	}
 	if len(finalAgentID) > 128 {
 		finalAgentID = finalAgentID[:128]
@@ -131,7 +135,7 @@ func Usage() string {
 		"  --gateway-url           Gateway API URL",
 		"",
 		"Optional:",
-		"  --agent-id              Agent ID (default hostname-pid)",
+		"  --agent-id              Agent ID (auto-generated from backend-token if not set)",
 		"  --log                   enable runtime logs (default true, set --log=false to disable)",
 		"  --gateway-type          clash|surge (default clash)",
 		"  --gateway-token         Gateway secret",

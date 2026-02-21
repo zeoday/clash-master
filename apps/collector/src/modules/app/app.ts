@@ -382,8 +382,9 @@ export async function createApp(options: AppOptions) {
     }
 
     // Allow rebinding if the existing agent has been offline for a while
-    // Use a longer timeout (60s) than the health check to avoid race conditions
-    const AGENT_BINDING_TIMEOUT_MS = 60000;
+    // Agent heartbeat interval is 30s, so 10s timeout allows quick restart
+    // while preventing accidental duplicate bindings
+    const AGENT_BINDING_TIMEOUT_MS = 10000;
     const lastSeenMs = new Date(heartbeat.lastSeen).getTime();
     const ageMs = Number.isFinite(lastSeenMs) ? Math.max(0, Date.now() - lastSeenMs) : Number.POSITIVE_INFINITY;
     
@@ -393,9 +394,12 @@ export async function createApp(options: AppOptions) {
     }
 
     reply.status(409).send({
-      error: `Agent token is already bound to '${heartbeat.agentId}'. Rotate token before binding '${agentId}'.`,
+      error: `Agent token is already bound to '${heartbeat.agentId}'. ` +
+             `Wait ${Math.round((AGENT_BINDING_TIMEOUT_MS - ageMs) / 1000)}s for previous agent to timeout. ` +
+             `If you need to run multiple agents on the same backend, use different --agent-id values.`,
       code: 'AGENT_TOKEN_ALREADY_BOUND',
       boundAgentId: heartbeat.agentId,
+      remainingSeconds: Math.round((AGENT_BINDING_TIMEOUT_MS - ageMs) / 1000),
     });
     return false;
   };

@@ -610,6 +610,33 @@ function buildAgentInstallScriptCommand(info: AgentBootstrapInfo): string {
   return generated;
 }
 
+function buildAgentQuickAddCommand(info: AgentBootstrapInfo): string {
+  const gatewayUrlWithConfig = buildGatewayUrl(
+    info.type,
+    info.gatewayHost,
+    info.gatewayPort,
+    info.gatewaySsl,
+  );
+  const backendToken = info.token.trim() || "<backend-token>";
+  const instanceName = `backend-${info.backendId}`;
+
+  const lines = [
+    "nekoagent add " + shellQuote(instanceName) + " \\",
+    "  --server-url " + shellQuote(getSuggestedServerUrl()) + " \\",
+    "  --backend-id " + info.backendId + " \\",
+    "  --backend-token " + shellQuote(backendToken) + " \\",
+    "  --gateway-type " + shellQuote(info.type) + " \\",
+    "  --gateway-url " + shellQuote(gatewayUrlWithConfig),
+  ];
+
+  if (info.gatewayToken.trim()) {
+    lines[lines.length - 1] = lines[lines.length - 1] + " \\";
+    lines.push("  --gateway-token " + shellQuote(info.gatewayToken.trim()));
+  }
+
+  return lines.join("\n");
+}
+
 export function BackendConfigDialog({
   open,
   onOpenChange,
@@ -664,6 +691,7 @@ export function BackendConfigDialog({
     useState(false);
   const [agentBootstrapInfo, setAgentBootstrapInfo] =
     useState<AgentBootstrapInfo | null>(null);
+  const [activeScriptTab, setActiveScriptTab] = useState<"install" | "add" | "run">("install");
   const [rotatingAgentToken, setRotatingAgentToken] = useState(false);
   const [rotateAgentTokenDialogOpen, setRotateAgentTokenDialogOpen] = useState(false);
 
@@ -3180,65 +3208,111 @@ export function BackendConfigDialog({
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <label className="text-sm font-medium">
-                  {t("agentCommand")}
-                </label>
-                <textarea
-                  readOnly
-                  value={buildAgentRunCommand(agentBootstrapInfo)}
-                  className="w-full min-h-[120px] sm:min-h-[150px] rounded-md border border-input bg-background px-3 py-2 text-xs font-mono leading-5"
-                />
-                {!agentBootstrapInfo.token.trim() && (
-                  <p className="text-[11px] text-muted-foreground">
-                    {t("agentTokenGenerateFirstHint")}
-                  </p>
-                )}
-                <div className="flex justify-end">
+              {/* Script Tabs */}
+              <div className="space-y-3">
+                {/* Tab Headers - Mobile: full width, Desktop: auto */}
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <div className="flex items-center gap-1 p-1 bg-muted rounded-lg overflow-x-auto">
+                    <button
+                      onClick={() => setActiveScriptTab("install")}
+                      className={`px-2 sm:px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors whitespace-nowrap flex-1 sm:flex-none text-center ${
+                        activeScriptTab === "install"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {t("scriptTabInstall")}
+                    </button>
+                    <button
+                      onClick={() => setActiveScriptTab("add")}
+                      className={`px-2 sm:px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors whitespace-nowrap flex-1 sm:flex-none text-center ${
+                        activeScriptTab === "add"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {t("scriptTabAdd")}
+                    </button>
+                    <button
+                      onClick={() => setActiveScriptTab("run")}
+                      className={`px-2 sm:px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors whitespace-nowrap flex-1 sm:flex-none text-center ${
+                        activeScriptTab === "run"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {t("scriptTabRun")}
+                    </button>
+                  </div>
                   <Button
-                    variant="outline"
+                    variant="ghost"
                     size="sm"
-                    className="w-full sm:w-auto"
+                    className="h-8 px-2 w-full sm:w-auto"
                     disabled={!agentBootstrapInfo.token.trim()}
-                    onClick={() =>
+                    onClick={() => {
+                      const text =
+                        activeScriptTab === "install"
+                          ? buildAgentInstallScriptCommand(agentBootstrapInfo)
+                          : activeScriptTab === "add"
+                            ? buildAgentQuickAddCommand(agentBootstrapInfo)
+                            : buildAgentRunCommand(agentBootstrapInfo);
                       void copyText(
-                        buildAgentRunCommand(agentBootstrapInfo),
-                        "agentCommandCopied",
-                      )
-                    }>
-                    <Copy className="w-4 h-4 mr-2" />
-                    {t("copyAgentCommand")}
+                        text,
+                        activeScriptTab === "install"
+                          ? "agentInstallScriptCopied"
+                          : activeScriptTab === "add"
+                            ? "agentQuickAddCopied"
+                            : "agentCommandCopied",
+                      );
+                    }}>
+                    <Copy className="w-4 h-4 mr-1.5" />
+                    {t("copy")}
                   </Button>
                 </div>
-              </div>
 
-              <div className="space-y-1">
-                <label className="text-sm font-medium">
-                  {t("agentInstallScriptCommand")}
-                </label>
-                <textarea
-                  readOnly
-                  value={buildAgentInstallScriptCommand(agentBootstrapInfo)}
-                  className="w-full min-h-[140px] sm:min-h-[170px] rounded-md border border-input bg-background px-3 py-2 text-xs font-mono leading-5"
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  {t("agentInstallScriptHint")}
-                </p>
-                <div className="flex justify-end">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full sm:w-auto"
-                    disabled={!agentBootstrapInfo.token.trim()}
-                    onClick={() =>
-                      void copyText(
-                        buildAgentInstallScriptCommand(agentBootstrapInfo),
-                        "agentInstallScriptCopied",
-                      )
-                    }>
-                    <Copy className="w-4 h-4 mr-2" />
-                    {t("copyAgentInstallScript")}
-                  </Button>
+                {/* Tab Content */}
+                <div className="relative">
+                  {activeScriptTab === "install" && (
+                    <div className="space-y-2">
+                      <p className="text-[11px] text-muted-foreground">
+                        {t("agentInstallScriptHint")}
+                      </p>
+                      <textarea
+                        readOnly
+                        value={buildAgentInstallScriptCommand(agentBootstrapInfo)}
+                        className="w-full min-h-[140px] sm:min-h-[180px] rounded-md border border-input bg-background px-3 py-2 text-xs font-mono leading-5"
+                      />
+                    </div>
+                  )}
+                  {activeScriptTab === "add" && (
+                    <div className="space-y-2">
+                      <p className="text-[11px] text-muted-foreground">
+                        {t("agentQuickAddHint")}
+                      </p>
+                      <textarea
+                        readOnly
+                        value={buildAgentQuickAddCommand(agentBootstrapInfo)}
+                        className="w-full min-h-[120px] sm:min-h-[160px] rounded-md border border-input bg-background px-3 py-2 text-xs font-mono leading-5"
+                      />
+                    </div>
+                  )}
+                  {activeScriptTab === "run" && (
+                    <div className="space-y-2">
+                      <p className="text-[11px] text-muted-foreground">
+                        {t("agentRunHint")}
+                      </p>
+                      <textarea
+                        readOnly
+                        value={buildAgentRunCommand(agentBootstrapInfo)}
+                        className="w-full min-h-[120px] sm:min-h-[160px] rounded-md border border-input bg-background px-3 py-2 text-xs font-mono leading-5"
+                      />
+                    </div>
+                  )}
+                  {!agentBootstrapInfo.token.trim() && (
+                    <p className="text-[11px] text-muted-foreground mt-2">
+                      {t("agentTokenGenerateFirstHint")}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

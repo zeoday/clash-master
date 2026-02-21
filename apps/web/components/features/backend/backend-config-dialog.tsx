@@ -523,7 +523,7 @@ function shellQuote(value: string): string {
   return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 }
 
-function buildAgentRunCommand(info: AgentBootstrapInfo): string {
+function buildAgentRunCommand(info: AgentBootstrapInfo, showToken = true): string {
   let generated = "";
   {
     const gatewayUrlWithConfig = buildGatewayUrl(
@@ -532,7 +532,8 @@ function buildAgentRunCommand(info: AgentBootstrapInfo): string {
       info.gatewayPort,
       info.gatewaySsl,
     );
-    const backendToken = info.token.trim() || "<backend-token>";
+    const rawToken = info.token.trim() || "<backend-token>";
+    const backendToken = showToken ? rawToken : "***";
     const lines = [
       "./neko-agent \\",
       "  --server-url " + shellQuote(getSuggestedServerUrl()) + " \\",
@@ -565,7 +566,7 @@ function buildAgentRunCommand(info: AgentBootstrapInfo): string {
   return generated;
 }
 
-function buildAgentInstallScriptCommand(info: AgentBootstrapInfo): string {
+function buildAgentInstallScriptCommand(info: AgentBootstrapInfo, showToken = true): string {
   let generated = "";
   {
     const gatewayUrlWithConfig = buildGatewayUrl(
@@ -574,7 +575,8 @@ function buildAgentInstallScriptCommand(info: AgentBootstrapInfo): string {
       info.gatewayPort,
       info.gatewaySsl,
     );
-    const backendToken = info.token.trim() || "<backend-token>";
+    const rawToken = info.token.trim() || "<backend-token>";
+    const backendToken = showToken ? rawToken : "***";
     const lines = [
       "curl -fsSL " + AGENT_INSTALL_SCRIPT_URL + " \\",
       "  | env NEKO_SERVER=" + shellQuote(getSuggestedServerUrl()) + " \\",
@@ -610,14 +612,15 @@ function buildAgentInstallScriptCommand(info: AgentBootstrapInfo): string {
   return generated;
 }
 
-function buildAgentQuickAddCommand(info: AgentBootstrapInfo): string {
+function buildAgentQuickAddCommand(info: AgentBootstrapInfo, showToken = true): string {
   const gatewayUrlWithConfig = buildGatewayUrl(
     info.type,
     info.gatewayHost,
     info.gatewayPort,
     info.gatewaySsl,
   );
-  const backendToken = info.token.trim() || "<backend-token>";
+  const rawToken = info.token.trim() || "<backend-token>";
+  const backendToken = showToken ? rawToken : "***";
   const instanceName = `backend-${info.backendId}`;
 
   const lines = [
@@ -692,6 +695,7 @@ export function BackendConfigDialog({
   const [agentBootstrapInfo, setAgentBootstrapInfo] =
     useState<AgentBootstrapInfo | null>(null);
   const [activeScriptTab, setActiveScriptTab] = useState<"install" | "add" | "run">("install");
+  const [showAgentToken, setShowAgentToken] = useState(false);
   const [rotatingAgentToken, setRotatingAgentToken] = useState(false);
   const [rotateAgentTokenDialogOpen, setRotateAgentTokenDialogOpen] = useState(false);
 
@@ -1242,7 +1246,7 @@ export function BackendConfigDialog({
     setAgentBootstrapInfo({
       backendId: backend.id,
       agentId: backend.agentId,
-      token: "",
+      token: backend.token || "",
       tokenLocked: true,
       type: backendType,
       gatewayHost: gatewayConfig.gatewayHost,
@@ -1251,6 +1255,7 @@ export function BackendConfigDialog({
       gatewayToken: gatewayConfig.gatewayToken,
     });
     setAgentBootstrapDialogOpen(true);
+    setShowAgentToken(false); // Reset token visibility when opening dialog
   };
 
   const handleRotateAgentToken = async () => {
@@ -1413,10 +1418,7 @@ export function BackendConfigDialog({
   return (
     <>
       <div
-        className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4"
-        onClick={(e) => {
-          if (e.target === e.currentTarget) onOpenChange(false);
-        }}>
+        className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
         <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -2477,7 +2479,7 @@ export function BackendConfigDialog({
             cancelEdit();
           }
         }}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="sm:max-w-xl" onPointerDownOutside={(e) => e.preventDefault()}>
           <DialogHeader>
             <DialogTitle>{commonT("edit")}</DialogTitle>
             <DialogDescription>{t("description")}</DialogDescription>
@@ -2629,7 +2631,7 @@ export function BackendConfigDialog({
             setFormData(getInitialFormState());
           }
         }}>
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="sm:max-w-xl" onPointerDownOutside={(e) => e.preventDefault()}>
           <DialogHeader>
             <DialogTitle>{t("addNew")}</DialogTitle>
             <DialogDescription>{t("description")}</DialogDescription>
@@ -2960,7 +2962,7 @@ export function BackendConfigDialog({
 
       {/* Change Token Dialog */}
       <Dialog open={changeTokenDialogOpen} onOpenChange={setChangeTokenDialogOpen}>
-        <DialogContent>
+        <DialogContent onPointerDownOutside={(e) => e.preventDefault()}>
           <DialogHeader>
             <DialogTitle>{t("auth.changeTokenTitle")}</DialogTitle>
             <DialogDescription>
@@ -3034,8 +3036,8 @@ export function BackendConfigDialog({
           }
           setAgentBootstrapDialogOpen(true);
         }}>
-        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-hidden p-0">
-          <DialogHeader className="px-6 pt-6 pb-2 border-b">
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-hidden p-0 flex flex-col" onPointerDownOutside={(e) => e.preventDefault()}>
+          <DialogHeader className="px-6 pt-6 pb-2 border-b shrink-0">
             <DialogTitle>{t("agentSetupTitle")}</DialogTitle>
             <DialogDescription>
               {t("agentSetupDescription", {
@@ -3044,7 +3046,7 @@ export function BackendConfigDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="max-h-[calc(90vh-180px)] overflow-y-auto px-6 py-4">
+          <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
           {agentBootstrapInfo && (
             <div className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -3097,42 +3099,56 @@ export function BackendConfigDialog({
                 <div className="space-y-1">
                   <label className="text-sm font-medium">{t("token")}</label>
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                  <Input
-                    readOnly
-                    disabled
-                    value={agentBootstrapInfo.token}
-                    placeholder={t("agentTokenHidden")}
-                    className="font-mono text-xs"
-                  />
+                    <div className="relative flex-1">
+                      <Input
+                        readOnly
+                        value={showAgentToken ? agentBootstrapInfo.token : agentBootstrapInfo.token.replace(/./g, "•")}
+                        placeholder={t("agentTokenHidden")}
+                        className="font-mono text-xs pr-10"
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+                        onClick={() => setShowAgentToken(!showAgentToken)}
+                        title={showAgentToken ? t("hideToken") : t("showToken")}
+                      >
+                        {showAgentToken ? (
+                          <EyeOff className="w-4 h-4 text-muted-foreground" />
+                        ) : (
+                          <Eye className="w-4 h-4 text-muted-foreground" />
+                        )}
+                      </Button>
+                    </div>
                     <Button
                       variant="outline"
                       size="icon"
-                    onClick={() =>
-                      void copyText(
-                        agentBootstrapInfo.token,
-                        "agentTokenCopied",
-                      )
-                    }
-                    title={t("copyAgentToken")}
-                    disabled={!agentBootstrapInfo.token.trim()}>
-                    <Copy className="w-4 h-4" />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setRotateAgentTokenDialogOpen(true)}
-                    disabled={rotatingAgentToken}
-                    className="w-full sm:w-auto"
-                  >
-                    {rotatingAgentToken ? t("rotating") : t("rotateAgentToken")}
-                  </Button>
+                      onClick={() =>
+                        void copyText(
+                          agentBootstrapInfo.token,
+                          "agentTokenCopied",
+                        )
+                      }
+                      title={t("copyAgentToken")}
+                      disabled={!agentBootstrapInfo.token.trim()}>
+                      <Copy className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setRotateAgentTokenDialogOpen(true)}
+                      disabled={rotatingAgentToken}
+                      className="w-full sm:w-auto"
+                    >
+                      {rotatingAgentToken ? t("rotating") : t("rotateAgentToken")}
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    {agentBootstrapInfo.token
+                      ? t("agentTokenRotateHint")
+                      : t("agentTokenUnavailableHint")}
+                  </p>
                 </div>
-                <p className="text-[11px] text-muted-foreground">
-                  {agentBootstrapInfo.token
-                    ? t("agentTokenRotateHint")
-                    : t("agentTokenUnavailableHint")}
-                </p>
-              </div>
 
               <div className="space-y-3 rounded-md border border-dashed p-3">
                 <div className="space-y-0.5">
@@ -3252,10 +3268,10 @@ export function BackendConfigDialog({
                     onClick={() => {
                       const text =
                         activeScriptTab === "install"
-                          ? buildAgentInstallScriptCommand(agentBootstrapInfo)
+                          ? buildAgentInstallScriptCommand(agentBootstrapInfo, showAgentToken)
                           : activeScriptTab === "add"
-                            ? buildAgentQuickAddCommand(agentBootstrapInfo)
-                            : buildAgentRunCommand(agentBootstrapInfo);
+                            ? buildAgentQuickAddCommand(agentBootstrapInfo, showAgentToken)
+                            : buildAgentRunCommand(agentBootstrapInfo, showAgentToken);
                       void copyText(
                         text,
                         activeScriptTab === "install"
@@ -3279,7 +3295,7 @@ export function BackendConfigDialog({
                       </p>
                       <textarea
                         readOnly
-                        value={buildAgentInstallScriptCommand(agentBootstrapInfo)}
+                        value={buildAgentInstallScriptCommand(agentBootstrapInfo, showAgentToken)}
                         className="w-full min-h-[140px] sm:min-h-[180px] rounded-md border border-input bg-background px-3 py-2 text-xs font-mono leading-5"
                       />
                     </div>
@@ -3291,7 +3307,7 @@ export function BackendConfigDialog({
                       </p>
                       <textarea
                         readOnly
-                        value={buildAgentQuickAddCommand(agentBootstrapInfo)}
+                        value={buildAgentQuickAddCommand(agentBootstrapInfo, showAgentToken)}
                         className="w-full min-h-[120px] sm:min-h-[160px] rounded-md border border-input bg-background px-3 py-2 text-xs font-mono leading-5"
                       />
                     </div>
@@ -3303,7 +3319,7 @@ export function BackendConfigDialog({
                       </p>
                       <textarea
                         readOnly
-                        value={buildAgentRunCommand(agentBootstrapInfo)}
+                        value={buildAgentRunCommand(agentBootstrapInfo, showAgentToken)}
                         className="w-full min-h-[120px] sm:min-h-[160px] rounded-md border border-input bg-background px-3 py-2 text-xs font-mono leading-5"
                       />
                     </div>
@@ -3319,7 +3335,7 @@ export function BackendConfigDialog({
           )}
           </div>
 
-          <DialogFooter className="px-6 py-4 border-t">
+          <DialogFooter className="px-6 py-4 border-t shrink-0">
             <Button onClick={() => void closeAgentBootstrapDialog()}>
               {commonT("confirm")}
             </Button>

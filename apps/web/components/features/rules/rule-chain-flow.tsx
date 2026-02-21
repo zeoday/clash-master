@@ -516,11 +516,7 @@ function FlowRenderer({
 
   // Active chain indices
   const activeIndices = useMemo(() => {
-    if (!selectedRule || !data.rulePaths[selectedRule]) {
-      console.info('[FlowRenderer] activeIndices is null:', { selectedRule, hasPath: selectedRule ? !!data.rulePaths[selectedRule] : false, rulePathKeys: Object.keys(data.rulePaths) });
-      return null;
-    }
-    console.info('[FlowRenderer] activeIndices:', { selectedRule, activeIndices: data.rulePaths[selectedRule] });
+    if (!selectedRule || !data.rulePaths[selectedRule]) return null;
     return data.rulePaths[selectedRule];
   }, [selectedRule, data]);
 
@@ -1033,20 +1029,9 @@ function UnifiedRuleChainFlowInner({
 
   // Compute active chain info from cached data
   const activeChainInfo: ActiveChainInfo | null = useMemo(() => {
-    console.info('[ChainFlow] gatewayProviders:', !!gatewayProviders, 'gatewayRules:', !!gatewayRules, 'gatewayProxies:', !!gatewayProxies, 'backendId:', activeBackendId);
-    if (!gatewayProviders || !gatewayRules) {
-      console.info('[ChainFlow] Missing providers or rules, returning null');
-      return null;
-    }
+    if (!gatewayProviders || !gatewayRules) return null;
     try {
-      const result = resolveActiveChains(gatewayProviders, gatewayRules, gatewayProxies || undefined);
-      console.info('[ChainFlow] activeChainInfo:', { 
-        backendId: activeBackendId,
-        activeNodeNames: Array.from(result.activeNodeNames).slice(0, 5), 
-        activeChainsCount: result.activeChains.size,
-        sampleChain: result.activeChains.size > 0 ? Array.from(result.activeChains.entries())[0] : null
-      });
-      return result;
+      return resolveActiveChains(gatewayProviders, gatewayRules, gatewayProxies || undefined);
     } catch (e) {
       console.error('[ChainFlow] resolveActiveChains error:', e);
       return null;
@@ -1092,13 +1077,6 @@ function UnifiedRuleChainFlowInner({
       normalizedRulePaths.set(key.trim(), value);
     }
 
-    // Debug: log selectedRule and rulePaths keys
-    if (selectedRule) {
-      console.info('[ChainFlow] Filtering for selectedRule:', selectedRule, 'rulePaths keys:', Object.keys(data.rulePaths));
-      const exactMatch = normalizedRulePaths.get(selectedRule);
-      console.info('[ChainFlow] exactMatch for selectedRule:', exactMatch);
-    }
-
     data.nodes.forEach((node, idx) => {
       // 1. If "All Policies" is checked, keep everything
       if (activePolicyOnly) {
@@ -1112,7 +1090,6 @@ function UnifiedRuleChainFlowInner({
         // Try exact match first
         const exactMatch = normalizedRulePaths.get(selectedRule);
         if (exactMatch?.nodeIndices.includes(idx)) {
-          console.info('[ChainFlow] Exact match for node:', node.name, 'idx:', idx);
           keepNodeIndices.add(idx);
           return;
         }
@@ -1120,7 +1097,6 @@ function UnifiedRuleChainFlowInner({
         for (const [key, value] of normalizedRulePaths.entries()) {
           if (key.includes(selectedRule) || selectedRule.includes(key)) {
             if (value.nodeIndices.includes(idx)) {
-              console.info('[ChainFlow] Fuzzy match for node:', node.name, 'idx:', idx, 'key:', key);
               keepNodeIndices.add(idx);
               return;
             }
@@ -1135,9 +1111,6 @@ function UnifiedRuleChainFlowInner({
          }
       }
     });
-
-    // Debug: log keepNodeIndices size before building new nodes
-    console.info('[ChainFlow] keepNodeIndices size before inject:', keepNodeIndices.size, 'selectedRule:', selectedRule);
 
     // Build new nodes array (existing kept + zero-traffic for missing active)
     const newNodes: MergedChainNode[] = [];
@@ -1350,7 +1323,6 @@ function UnifiedRuleChainFlowInner({
       
       if (nodeIndices.length > 0) {
         newRulePaths[selectedRule] = { nodeIndices, linkIndices };
-        console.info('[ChainFlow] Updated selectedRule path in newRulePaths:', { selectedRule, nodeIndices, linkIndices, wasExisting: !!existingSelectedPath });
       }
     }
 
@@ -1381,21 +1353,6 @@ function UnifiedRuleChainFlowInner({
       maxLayer,
     };
   }, [data, activePolicyOnly, activeChainInfo, selectedRule, visibleRuleNames]);
-
-  // Debug: log filtered data
-  useEffect(() => {
-    if (filteredData) {
-      console.info('[ChainFlow] filteredData:', { 
-        backendId: activeBackendId,
-        nodesCount: filteredData.nodes.length, 
-        linksCount: filteredData.links.length,
-        nodeNames: filteredData.nodes.map(n => n.name),
-        rulePathKeys: Object.keys(filteredData.rulePaths),
-        selectedRulePath: selectedRule ? filteredData.rulePaths[selectedRule] : null,
-        selectedRule
-      });
-    }
-  }, [filteredData, selectedRule, activeBackendId]);
 
   const renderData = filteredData;
 

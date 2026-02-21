@@ -167,7 +167,6 @@ export function InteractiveRuleStats({
   // Ruleset metadata changes infrequently, so load on mount/backend switch only.
 
   const chartData = useMemo<RuleChartItem[]>(() => {
-    console.info('[RuleStats] rulesData:', rulesData);
     if (!rulesData) return [];
     
     // Normalize rule names for deduplication (trim whitespace)

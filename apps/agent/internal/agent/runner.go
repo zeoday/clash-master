@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/foru17/neko-master/apps/agent/internal/config"
@@ -61,6 +62,7 @@ type Runner struct {
 	httpClient    *http.Client
 	gatewayClient *gateway.Client
 	hostname      string
+	lockFile      *os.File
 
 	mu      sync.Mutex
 	queue   []domain.TrafficUpdate
@@ -87,8 +89,75 @@ func NewRunner(cfg config.Config) *Runner {
 	}
 }
 
+func (r *Runner) acquireLock() error {
+	// Use OS temp directory for lock file
+	lockDir := os.TempDir()
+	lockPath := fmt.Sprintf("%s/neko-agent-backend-%d.lock", lockDir, r.cfg.BackendID)
+	
+	// Check if lock file exists and if process is still running
+	if data, err := os.ReadFile(lockPath); err == nil {
+		var pid int
+		if _, err := fmt.Sscanf(string(data), "%d", &pid); err == nil {
+			// Check if process is still running
+			if pid > 0 && pid != os.Getpid() {
+				if isProcessRunning(pid) {
+					return fmt.Errorf("another agent instance (PID %d) is already running for backend %d", pid, r.cfg.BackendID)
+				}
+				// Process is not running, stale lock file
+				log.Printf("[agent:%s] removing stale lock file from PID %d", r.cfg.AgentID, pid)
+				os.Remove(lockPath)
+			}
+		}
+	}
+	
+	// Create lock file with exclusive flag (O_EXCL)
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("lock file already exists for backend %d", r.cfg.BackendID)
+		}
+		return fmt.Errorf("failed to create lock file: %w", err)
+	}
+	
+	// Write PID to lock file
+	pid := fmt.Sprintf("%d", os.Getpid())
+	if _, err := file.WriteString(pid); err != nil {
+		file.Close()
+		os.Remove(lockPath)
+		return fmt.Errorf("failed to write PID to lock file: %w", err)
+	}
+	
+	r.lockFile = file
+	return nil
+}
+
+func (r *Runner) releaseLock() {
+	if r.lockFile != nil {
+		lockPath := r.lockFile.Name()
+		r.lockFile.Close()
+		os.Remove(lockPath)
+		r.lockFile = nil
+	}
+}
+
+// isProcessRunning checks if a process with given PID is running
+func isProcessRunning(pid int) bool {
+	// On Unix, use syscall.Kill with signal 0 to check if process exists
+	// Signal 0 performs error checking without actually sending a signal
+	err := syscall.Kill(pid, 0)
+	return err == nil
+}
+
 func (r *Runner) Run(ctx context.Context) {
 	log.Printf("[agent:%s] starting, backend=%d, gateway_type=%s, server=%s", r.cfg.AgentID, r.cfg.BackendID, r.cfg.GatewayType, r.cfg.ServerAPIBase)
+
+	// Acquire singleton lock to prevent multiple instances for same backend
+	if err := r.acquireLock(); err != nil {
+		log.Printf("[agent:%s] failed to acquire lock: %v", r.cfg.AgentID, err)
+		log.Printf("[agent:%s] hint: another agent instance may be running for backend %d", r.cfg.AgentID, r.cfg.BackendID)
+		return
+	}
+	defer r.releaseLock()
 
 	var wg sync.WaitGroup
 	wg.Add(5)

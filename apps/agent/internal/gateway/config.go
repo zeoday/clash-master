@@ -159,12 +159,15 @@ func (c *Client) getSurgePolicyState(ctx context.Context) (*domain.PolicyStateSn
 	providerProxies := make([]domain.GatewayProxy, 0, len(policiesData.PolicyGroups))
 
 	// Fetch current selection for each policy group
+	// Surge uses /v1/policy_groups/select?group_name=xxx endpoint
 	for _, g := range policiesData.PolicyGroups {
 		var groupDetail struct {
 			Type   string `json:"type"`
 			Policy string `json:"policy"`
 		}
-		if err := c.getJSON(ctx, "/v1/policies/"+url.PathEscape(g), &groupDetail); err != nil {
+		query := url.Values{}
+		query.Set("group_name", g)
+		if err := c.getJSON(ctx, "/v1/policy_groups/select?"+query.Encode(), &groupDetail); err != nil {
 			fmt.Printf("[agent] warning: failed to get policy detail for %s: %v\n", g, err)
 		}
 		snap.Proxies[g] = domain.GatewayProxy{
@@ -276,9 +279,6 @@ func (c *Client) getSurgeConfig(ctx context.Context) (*domain.GatewayConfigSnaps
 	}
 
 	for i, raw := range rulesData.Rules {
-		if i < 3 {
-			fmt.Printf("[agent] rule %d: %s\n", i, raw)
-		}
 		snap.Rules[i] = parseSurgeRuleForAgent(raw)
 	}
 
@@ -292,12 +292,16 @@ func (c *Client) getSurgeConfig(ctx context.Context) (*domain.GatewayConfigSnaps
 	// Build provider proxies slice for policy groups
 	providerProxies := make([]domain.GatewayProxy, 0, len(policiesData.PolicyGroups))
 	
+	// Fetch current selection for each policy group
+	// Surge uses /v1/policy_groups/select?group_name=xxx endpoint
 	for _, g := range policiesData.PolicyGroups {
 		var groupDetail struct {
 			Type   string `json:"type"`
 			Policy string `json:"policy"`
 		}
-		if err := c.getJSON(ctx, "/v1/policies/"+url.PathEscape(g), &groupDetail); err != nil {
+		query := url.Values{}
+		query.Set("group_name", g)
+		if err := c.getJSON(ctx, "/v1/policy_groups/select?"+query.Encode(), &groupDetail); err != nil {
 			fmt.Printf("[agent] warning: failed to get policy detail for %s: %v\n", g, err)
 		}
 		snap.Proxies[g] = domain.GatewayProxy{
@@ -311,7 +315,6 @@ func (c *Client) getSurgeConfig(ctx context.Context) (*domain.GatewayConfigSnaps
 			Type: groupDetail.Type,
 			Now:  groupDetail.Policy,
 		})
-		fmt.Printf("[agent] policy group: %s, type: %s, now: %s\n", g, groupDetail.Type, groupDetail.Policy)
 	}
 	
 	// Create a default provider containing all policy groups
@@ -322,7 +325,6 @@ func (c *Client) getSurgeConfig(ctx context.Context) (*domain.GatewayConfigSnaps
 			Type:    "SurgePolicyGroups",
 			Proxies: providerProxies,
 		}
-		fmt.Printf("[agent] created default provider with %d policy groups\n", len(providerProxies))
 	}
 
 	return snap, nil

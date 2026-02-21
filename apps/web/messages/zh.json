@@ -396,6 +396,8 @@
     "copyBackendId": "复制后端 ID",
     "copyAgentId": "复制 Agent 标识",
     "copy": "复制",
+    "showToken": "显示令牌",
+    "hideToken": "隐藏令牌",
     "agentTokenPlaceholder": "粘贴 backend-token（用于生成完整脚本）",
     "agentTokenEditHint": "请手动填写 backend-token。",
     "agentTokenInputHint": "可手动填写 backend-token 生成脚本（不会保存到服务端）。",

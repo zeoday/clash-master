@@ -175,11 +175,10 @@ export class BackendService {
     const backends = this.db.getAllBackends();
     const isShowcase = this.authService.isShowcaseMode();
 
-    return backends.map(({ token, ...rest }) => 
+    return backends.map((backend) => 
       this.attachHealthStatus({
-        ...rest,
-        hasToken: !!token,
-        url: isShowcase ? maskUrl(rest.url) : rest.url,
+        ...backend,
+        url: isShowcase ? maskUrl(backend.url) : backend.url,
       })
     );
   }
@@ -192,13 +191,11 @@ export class BackendService {
     if (!backend) {
       return { error: 'No active backend configured' };
     }
-    const { token, ...rest } = backend;
     const isShowcase = this.authService.isShowcaseMode();
 
     return this.attachHealthStatus({ 
-      ...rest, 
-      hasToken: !!token,
-      url: isShowcase ? maskUrl(rest.url) : rest.url,
+      ...backend,
+      url: isShowcase ? maskUrl(backend.url) : backend.url,
     });
   }
 
@@ -209,11 +206,10 @@ export class BackendService {
     const backends = this.db.getListeningBackends();
     const isShowcase = this.authService.isShowcaseMode();
 
-    return backends.map(({ token, ...rest }) => 
+    return backends.map((backend) => 
       this.attachHealthStatus({
-        ...rest,
-        hasToken: !!token,
-        url: isShowcase ? maskUrl(rest.url) : rest.url,
+        ...backend,
+        url: isShowcase ? maskUrl(backend.url) : backend.url,
       })
     );
   }

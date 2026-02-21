@@ -45,13 +45,13 @@ export interface BackendResponse {
   id: number;
   name: string;
   url: string;
+  token: string;
   type: 'clash' | 'surge';
   enabled: boolean;
   is_active: boolean;
   listening: boolean;
   created_at: string;
   updated_at: string;
-  hasToken: boolean;
   health?: BackendHealthInfo;
 }
 

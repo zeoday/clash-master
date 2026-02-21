@@ -397,6 +397,8 @@
     "copyBackendId": "Copy backend ID",
     "copyAgentId": "Copy agent ID",
     "copy": "Copy",
+    "showToken": "Show Token",
+    "hideToken": "Hide Token",
     "agentTokenPlaceholder": "Paste backend-token to generate full scripts",
     "agentTokenEditHint": "Please fill backend-token manually.",
     "agentTokenInputHint": "You can paste backend-token to generate scripts (it is not saved to backend settings).",

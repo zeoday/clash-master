@@ -398,7 +398,6 @@ func isDomainName(host string) bool {
 
 func convertSurgeChains(policyName string, originalPolicyName string, notes []string) []string {
 	if fromNotes := extractPolicyPathFromNotes(notes); len(fromNotes) >= 2 {
-		fmt.Printf("[agent] convertSurgeChains from notes: %v -> %v\n", notes, fromNotes)
 		return fromNotes
 	}
 
@@ -413,7 +412,6 @@ func convertSurgeChains(policyName string, originalPolicyName string, notes []st
 	if len(chains) == 0 {
 		return []string{"DIRECT"}
 	}
-	fmt.Printf("[agent] convertSurgeChains fallback: policy=%s, original=%s, notes=%v -> %v\n", policyName, originalPolicyName, notes, chains)
 	return chains
 }
 

@@ -76,7 +76,6 @@ export function resolveActiveChains(
   // Use the global proxy list (from /gateway/proxies) as the primary source for 'now'
   // because it contains the accurate 'now' field we fetched from the backend.
   const groupNowMap = buildGroupNowMap(providers, proxies);
-  console.info('[active-chain] groupNowMap size:', groupNowMap.size, 'entries:', Array.from(groupNowMap.entries()).slice(0, 10));
   
   const activeNodeNames = new Set<string>();
   const activeLinkKeys = new Set<string>();
@@ -105,7 +104,6 @@ export function resolveActiveChains(
   
   // 2. Process all rules
   if (rules && rules.rules) {
-      console.info('[active-chain] Processing', rules.rules.length, 'rules');
       for (const rawRule of rules.rules) {
         const parsed = parseGatewayRule(rawRule);
         if (!parsed || !parsed.proxy) continue;
@@ -128,11 +126,6 @@ export function resolveActiveChains(
             activeNodeNames.add(ruleName);
             if (groupChain.length > 0) {
                activeLinkKeys.add(encodeActiveLinkKey(ruleName, groupChain[0]));
-            }
-            
-            // Debug log for GitHub rule
-            if (ruleName.includes('GitHub') || targetGroup.includes('GitHub') || targetGroup.includes('国外')) {
-              console.info('[active-chain] GitHub-related rule:', { ruleName, targetGroup, groupChain, ruleChain });
             }
         }
       }

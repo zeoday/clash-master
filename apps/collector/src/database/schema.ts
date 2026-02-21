@@ -414,6 +414,17 @@ export const SCHEMA = {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `,
+
+  // Agent config snapshot - persists agent configuration across restarts
+  AGENT_SNAPSHOTS: `
+    CREATE TABLE IF NOT EXISTS agent_snapshots (
+      backend_id INTEGER PRIMARY KEY,
+      config_json TEXT NOT NULL,
+      policy_state_json TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (backend_id) REFERENCES backend_configs(id) ON DELETE CASCADE
+    );
+  `,
 } as const;
 
 // Index definitions
@@ -527,6 +538,7 @@ export function getAllSchemaStatements(): string[] {
     SCHEMA.RULE_IP_TRAFFIC,
     SCHEMA.BACKEND_CONFIGS,
     SCHEMA.AGENT_HEARTBEATS,
+    SCHEMA.AGENT_SNAPSHOTS,
     SCHEMA.APP_CONFIG,
     SCHEMA.SURGE_POLICY_CACHE,
     SCHEMA.AUTH_CONFIG,

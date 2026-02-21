@@ -1068,6 +1068,68 @@ export class StatsDatabase {
   getSurgePolicyCacheLastUpdate(backendId: number) { return this.repos.surge.getSurgePolicyCacheLastUpdate(backendId); }
   clearSurgePolicyCache(backendId: number) { this.repos.surge.clearSurgePolicyCache(backendId); }
 
+  // ==================== Agent Config Snapshot (persist across restarts) ====================
+  saveAgentSnapshot(
+    backendId: number,
+    config: { rules: unknown[]; proxies: Record<string, unknown>; providers: Record<string, unknown>; timestamp: number; hash: string },
+    policyState?: { proxies: Record<string, unknown>; providers: Record<string, unknown>; timestamp: number },
+  ): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO agent_snapshots (backend_id, config_json, policy_state_json, updated_at)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(backend_id) DO UPDATE SET
+        config_json = excluded.config_json,
+        policy_state_json = excluded.policy_state_json,
+        updated_at = CURRENT_TIMESTAMP
+    `);
+    stmt.run(backendId, JSON.stringify(config), policyState ? JSON.stringify(policyState) : null);
+  }
+
+  loadAgentSnapshot(backendId: number): { config: unknown; policyState?: unknown } | undefined {
+    const stmt = this.db.prepare(`
+      SELECT config_json, policy_state_json
+      FROM agent_snapshots
+      WHERE backend_id = ?
+      LIMIT 1
+    `);
+    const row = stmt.get(backendId) as { config_json: string; policy_state_json: string | null } | undefined;
+    if (!row) return undefined;
+    try {
+      return {
+        config: JSON.parse(row.config_json),
+        policyState: row.policy_state_json ? JSON.parse(row.policy_state_json) : undefined,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  loadAllAgentSnapshots(): Array<{ backendId: number; config: unknown; policyState?: unknown }> {
+    const stmt = this.db.prepare(`
+      SELECT backend_id, config_json, policy_state_json
+      FROM agent_snapshots
+    `);
+    const rows = stmt.all() as Array<{ backend_id: number; config_json: string; policy_state_json: string | null }>;
+    const results: Array<{ backendId: number; config: unknown; policyState?: unknown }> = [];
+    for (const row of rows) {
+      try {
+        results.push({
+          backendId: row.backend_id,
+          config: JSON.parse(row.config_json),
+          policyState: row.policy_state_json ? JSON.parse(row.policy_state_json) : undefined,
+        });
+      } catch {
+        // Skip invalid JSON rows
+      }
+    }
+    return results;
+  }
+
+  deleteAgentSnapshot(backendId: number): void {
+    const stmt = this.db.prepare('DELETE FROM agent_snapshots WHERE backend_id = ?');
+    stmt.run(backendId);
+  }
+
   close() {
     this.db.close();
   }

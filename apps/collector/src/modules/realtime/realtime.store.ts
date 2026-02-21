@@ -8,6 +8,7 @@ import type {
   StatsSummary,
   TrafficTrendPoint,
 } from '@neko-master/shared';
+import type { StatsDatabase } from '../db/db.js';
 
 type SummaryDelta = {
   upload: number;
@@ -243,12 +244,51 @@ export class RealtimeStore {
   private static readonly MAX_RULE_CHAIN_ENTRIES = 50_000;
   private static readonly MAX_DEVICE_DETAIL_ENTRIES = 10_000;
 
+  private db: StatsDatabase | null = null;
+
   constructor(maxMinutes = parseInt(process.env.REALTIME_MAX_MINUTES || '180', 10)) {
     this.maxMinutes = Number.isFinite(maxMinutes) ? Math.max(30, maxMinutes) : 180;
   }
 
+  // Set database reference for persistence (call once during initialization)
+  setDatabase(db: StatsDatabase): void {
+    this.db = db;
+    // Load existing snapshots from database
+    this.loadAgentSnapshotsFromDB();
+  }
+
+  // Load all agent snapshots from database into memory
+  private loadAgentSnapshotsFromDB(): void {
+    if (!this.db) return;
+    try {
+      const snapshots = this.db.loadAllAgentSnapshots();
+      for (const snap of snapshots) {
+        if (snap.config) {
+          this.agentConfigByBackend.set(snap.backendId, snap.config as AgentGatewayConfig);
+        }
+        if (snap.policyState) {
+          this.agentPolicyStateByBackend.set(snap.backendId, snap.policyState as AgentPolicyState);
+        }
+      }
+      if (snapshots.length > 0) {
+        console.info(`[RealtimeStore] Loaded ${snapshots.length} agent snapshot(s) from database`);
+      }
+    } catch (err) {
+      console.warn('[RealtimeStore] Failed to load agent snapshots:', err);
+    }
+  }
+
   setAgentConfig(backendId: number, config: AgentGatewayConfig): void {
     this.agentConfigByBackend.set(backendId, config);
+    // Persist to database if available
+    if (this.db) {
+      try {
+        const policyState = this.agentPolicyStateByBackend.get(backendId);
+        this.db.saveAgentSnapshot(backendId, config, policyState);
+      } catch (err) {
+        console.warn('[RealtimeStore] Failed to save agent config snapshot:', err);
+      }
+    }
   }
 
   getAgentConfig(backendId: number): AgentGatewayConfig | undefined {
@@ -257,6 +297,17 @@ export class RealtimeStore {
 
   setAgentPolicyState(backendId: number, state: AgentPolicyState): void {
     this.agentPolicyStateByBackend.set(backendId, state);
+    // Persist to database if available
+    if (this.db) {
+      try {
+        const config = this.agentConfigByBackend.get(backendId);
+        if (config) {
+          this.db.saveAgentSnapshot(backendId, config, state);
+        }
+      } catch (err) {
+        console.warn('[RealtimeStore] Failed to save agent policy state snapshot:', err);
+      }
+    }
   }
 
   getAgentPolicyState(backendId: number): AgentPolicyState | undefined {

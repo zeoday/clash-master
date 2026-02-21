@@ -60,6 +60,9 @@ async function main() {
   console.log('[Main] Initializing database at:', DB_PATH);
   db = new StatsDatabase(DB_PATH);
 
+  // Connect realtimeStore to database for agent config persistence
+  realtimeStore.setDatabase(db);
+
   clickHouseCompareService = new ClickHouseCompareService(db);
   clickHouseCompareService.start();
 

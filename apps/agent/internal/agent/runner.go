@@ -69,7 +69,8 @@ type Runner struct {
 	flows   map[string]trackedFlow
 	dropped int64
 
-	lastConfigHash string
+	lastConfigHash  string
+	lastPolicyHash  string
 }
 
 func NewRunner(cfg config.Config) *Runner {
@@ -359,6 +360,18 @@ func (r *Runner) syncPolicyState(ctx context.Context) error {
 		return err
 	}
 
+	// Skip POST when policy state is unchanged (same as syncConfig dedup pattern)
+	data, _ := json.Marshal(snap)
+	hash := fmt.Sprintf("%x", md5.Sum(data))
+
+	r.mu.Lock()
+	unchanged := hash == r.lastPolicyHash
+	r.mu.Unlock()
+
+	if unchanged {
+		return nil
+	}
+
 	snap.Timestamp = time.Now().UnixMilli()
 
 	payload := policyStatePayload{
@@ -371,6 +384,9 @@ func (r *Runner) syncPolicyState(ctx context.Context) error {
 		return err
 	}
 
+	r.mu.Lock()
+	r.lastPolicyHash = hash
+	r.mu.Unlock()
 	return nil
 }
 

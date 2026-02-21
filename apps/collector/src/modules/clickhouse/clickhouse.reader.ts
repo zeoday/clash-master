@@ -1230,7 +1230,10 @@ ORDER BY rule, chain
   private toDateTime(value: string): string {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) {
-      return '1970-01-01 00:00:00';
+      // Return current time so the query scans an effectively empty window
+      // instead of defaulting to epoch and pulling all historical data.
+      console.warn(`[ClickHouse Reader] Invalid date value: ${JSON.stringify(value)}, clamping to now to prevent full table scan`);
+      return new Date().toISOString().slice(0, 19).replace('T', ' ');
     }
     return date.toISOString().slice(0, 19).replace('T', ' ');
   }

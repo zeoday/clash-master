@@ -132,13 +132,14 @@
 │  └─────────────────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
                                            │
-                                           │ SQLite (better-sqlite3)
+                                           ├──→ SQLite (better-sqlite3) [always written]
+                                           └──→ ClickHouse HTTP API [optional dual-write]
                                            ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                                      Storage Layer                                       │
 │                                                                                          │
 │  ┌─────────────────────────────────────────────────────────────────────────────────┐   │
-│  │                     SQLite Database (WAL Mode)                                   │   │
+│  │                     SQLite Database (WAL Mode)  [always enabled]                 │   │
 │  │                                                                                  │   │
 │  │  ┌─────────────────────────────────────────────────────────────────────────┐   │   │
 │  │  │  Statistics Tables (partitioned by backend_id)                            │   │   │
@@ -169,6 +170,28 @@
 │  │  │  │  auth_config   │ │ retention_config│ │surge_policy_cache│             │   │   │
 │  │  │  │                │ │                │ │                │               │   │   │
 │  │  │  └────────────────┘ └────────────────┘ └────────────────┘               │   │   │
+│  │  └─────────────────────────────────────────────────────────────────────────┘   │   │
+│  └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│  │              ClickHouse Database [optional, enabled with CH_ENABLED=1]           │   │
+│  │                                                                                  │   │
+│  │  ┌─────────────────────────────────────────────────────────────────────────┐   │   │
+│  │  │  Buffer Tables (async receive, ~5min merge)                               │   │   │
+│  │  │                                                                             │   │   │
+│  │  │  ┌───────────────────────┐  ┌───────────────────────┐                   │   │   │
+│  │  │  │  traffic_detail_buffer│  │  traffic_agg_buffer   │                   │   │   │
+│  │  │  └───────────┬───────────┘  └──────────┬────────────┘                   │   │   │
+│  │  │              │ merge                    │ merge                           │   │   │
+│  │  │              ▼                          ▼                                │   │   │
+│  │  │  ┌───────────────────────┐  ┌───────────────────────┐                   │   │   │
+│  │  │  │  traffic_detail       │  │  traffic_agg          │                   │   │   │
+│  │  │  │  (SummingMergeTree)   │  │  (SummingMergeTree)   │                   │   │   │
+│  │  │  └───────────────────────┘  └───────────────────────┘                   │   │   │
+│  │  │                                                                             │   │   │
+│  │  │  ┌───────────────────────┐                                               │   │   │
+│  │  │  │  country_buffer       │ → country_stats (SummingMergeTree)            │   │   │
+│  │  │  └───────────────────────┘                                               │   │   │
 │  │  └─────────────────────────────────────────────────────────────────────────┘   │   │
 │  └─────────────────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
@@ -236,7 +259,8 @@ ClashCollector
     │      - Batch cache optimization
     │
     ├── 4. Data Write
-    │      ├──→ SQLite (Persistence)
+    │      ├──→ SQLite (Persistence, always written)
+    │      ├──→ ClickHouse (optional dual-write, when CH_WRITE_ENABLED=1)
     │      └──→ RealtimeStore (In-Memory)
     │
     └── 5. Trigger Broadcast
@@ -271,7 +295,8 @@ SurgeCollector
     │      - 30s flush
     │
     ├── 5. Data Write
-    │      ├──→ SQLite (Persistence)
+    │      ├──→ SQLite (Persistence, always written)
+    │      ├──→ ClickHouse (optional dual-write, when CH_WRITE_ENABLED=1)
     │      └──→ RealtimeStore (In-Memory)
     │
     └── 6. Trigger Broadcast
@@ -288,7 +313,7 @@ WebSocketServer
     │      - Establish ClientInfo (backend, range, interval)
     │
     ├── Data Preparation
-    │      - Query base data from SQLite
+    │      - Query base data from SQLite or ClickHouse (controlled by STATS_QUERY_SOURCE)
     │      - RealtimeStore.merge*() merge real-time deltas
     │      - Summary cache (2s TTL)
     │
@@ -354,16 +379,29 @@ BaseRepository (Abstract Base Class)
     └── ... 13 shared utility methods total
 ```
 
-### Dual Write Pattern
+### Triple Write Pattern
 
 ```
 Collector receives traffic data
     │
-    ├──→ SQLite (Persistent Storage)
-    │      └─ For historical queries, aggregate statistics
+    ├──→ SQLite (Persistent Storage, always written)
+    │      └─ Config / metadata / historical stats (auto-fallback when CH is down)
+    │
+    ├──→ ClickHouse (optional, when CH_WRITE_ENABLED=1)
+    │      └─ Stats dual-write → Buffer tables → SummingMergeTree async merge
+    │      └─ Health fallback: after CH_UNHEALTHY_THRESHOLD consecutive failures,
+    │         automatically falls back to SQLite writes
     │
     └──→ RealtimeStore (In-Memory Real-time)
-           └─ For real-time display, low-latency push
+           └─ For real-time display, low-latency push (compensates Buffer delay)
+```
+
+**Read Routing (STATS_QUERY_SOURCE)**
+
+```
+STATS_QUERY_SOURCE=sqlite     → all reads from SQLite (default)
+STATS_QUERY_SOURCE=clickhouse → all reads from ClickHouse
+STATS_QUERY_SOURCE=auto       → smart routing (recent → CH, historical → SQLite)
 ```
 
 ### Delta Merge Pattern
@@ -418,6 +456,73 @@ SurgeCollector
 
 ---
 
+## ClickHouse Module Design
+
+### Writer (ClickHouseWriter)
+
+```
+ClickHouseWriter
+    │
+    ├── Health Tracking
+    │      consecutiveFailures  ── consecutive failure counter
+    │      isHealthy()          ── true if < CH_UNHEALTHY_THRESHOLD
+    │
+    ├── insertRows()
+    │      ├── Normal path → HTTP POST → ClickHouse Buffer table
+    │      │      success: reset consecutiveFailures, log recovery
+    │      └── On error: consecutiveFailures++
+    │             reaching threshold → mark unhealthy + warn log
+    │
+    └── Backpressure protection
+           pendingBatches ≥ CH_WRITE_MAX_PENDING_BATCHES → drop incoming batch
+```
+
+### Reader (ClickHouseReader)
+
+```
+ClickHouseReader
+    │
+    ├── query(sql)
+    │      HTTP POST body carries SQL (avoids URL length limits)
+    │      → FORMAT JSON → parse result set
+    │
+    └── toDateTime(value)
+           valid date  → format as ClickHouse datetime string
+           invalid date → clamp to current time (prevents epoch → full table scan)
+```
+
+### Dual-Write Dispatcher (BatchBuffer)
+
+```
+BatchBuffer.flush()
+    │
+    ├── 1. Evaluate write mode
+    │      clickHouseWriter.isHealthy() → true
+    │          → shouldSkipSqliteStatsWrites(true)
+    │            → CH_ONLY_MODE=1: skip SQLite stats writes
+    │      clickHouseWriter.isHealthy() → false
+    │          → force SQLite write (regardless of CH_ONLY_MODE)
+    │
+    ├── 2. SQLite write (conditional on mode)
+    │
+    └── 3. ClickHouse write (parallel, when CH_WRITE_ENABLED=1)
+           failure → does not affect SQLite; tracked internally by Writer
+```
+
+### Read Routing (StatsService)
+
+```
+STATS_QUERY_SOURCE env var
+    │
+    ├── sqlite      → all queries via SQLite Repository (default)
+    ├── clickhouse  → all queries via ClickHouseReader
+    └── auto        → shouldUseClickHouse()
+                       ├── valid time range → ClickHouseReader
+                       └── invalid time range → SQLite (fallback)
+```
+
+---
+
 ## Authentication Flow (Cookie-Based)
 
 ```
@@ -440,16 +545,18 @@ Subsequent requests automatically carry Cookie
 
 ## Performance Optimization
 
-| Layer        | Optimization Technique                | Effect                      |
-| ------------ | ------------------------------------- | --------------------------- |
-| **Collect**  | Batch Write (Batch Buffer)            | Reduce 90% DB writes        |
-| **Collect**  | GeoIP Batch Query + Cache             | Reduce 80% external requests|
-| **Collect**  | Policy Cache Sync                     | Reduce 95% API calls        |
-| **Collect**  | Exponential Backoff Retry             | Improve connection stability|
-| **Query**    | RealtimeStore Delta Merge             | Real-time data < 100ms      |
-| **Query**    | WebSocket Summary Cache (2s TTL)      | Reduce 70% DB queries       |
-| **Storage**  | SQLite WAL Mode                       | Concurrent read/write       |
-| **Storage**  | Data Retention Policy (Auto-cleanup)  | Control storage growth      |
+| Layer        | Optimization Technique                | Effect                           |
+| ------------ | ------------------------------------- | -------------------------------- |
+| **Collect**  | Batch Write (Batch Buffer)            | Reduce 90% DB writes             |
+| **Collect**  | GeoIP Batch Query + Cache             | Reduce 80% external requests     |
+| **Collect**  | Policy Cache Sync                     | Reduce 95% API calls             |
+| **Collect**  | Exponential Backoff Retry             | Improve connection stability     |
+| **Query**    | RealtimeStore Delta Merge             | Real-time data < 100ms           |
+| **Query**    | WebSocket Summary Cache (2s TTL)      | Reduce 70% DB queries            |
+| **Query**    | ClickHouse columnar storage (optional)| 10x+ speedup for wide time ranges|
+| **Storage**  | SQLite WAL Mode                       | Concurrent read/write            |
+| **Storage**  | ClickHouse SummingMergeTree           | Auto-dedup aggregation, less I/O |
+| **Storage**  | Data Retention Policy (Auto-cleanup)  | Control storage growth           |
 
 ---
 
@@ -524,7 +631,15 @@ neko-master/
 │       │   ├── modules/              # Business modules
 │       │   │   ├── auth/             # Authentication
 │       │   │   ├── backend/          # Backend management
-│       │   │   ├── stats/            # Stats service
+│       │   │   ├── clickhouse/       # ClickHouse module (optional)
+│       │   │   │   ├── clickhouse.config.ts   # Config loader
+│       │   │   │   ├── clickhouse.writer.ts   # Writer (dual-write + health tracking)
+│       │   │   │   └── clickhouse.reader.ts   # Reader (POST-body SQL queries)
+│       │   │   ├── collector/        # Collector core
+│       │   │   │   └── batch-buffer.ts        # Batch buffer + dual-write dispatcher
+│       │   │   ├── stats/            # Stats service (read routing)
+│       │   │   │   ├── stats.service.ts       # Read routing (STATS_QUERY_SOURCE)
+│       │   │   │   └── stats-write-mode.ts    # Write mode decision
 │       │   │   ├── surge/            # Surge service
 │       │   │   ├── realtime/         # Real-time data
 │       │   │   └── websocket/        # WebSocket

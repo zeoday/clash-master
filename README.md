@@ -76,6 +76,7 @@ Neko Master 专注于对网络流量进行轻量、精确的分析与可视化�
 - [📖 首次使用](#-首次使用)
 - [🔧 端口冲突解决](#-端口冲突解决)
 - [🐳 Docker 配置](#-docker-配置)
+- [🗄️ ClickHouse（可选）](#-clickhouse-可选)
 - [🌐 反向代理与 Tunnel](#-反向代理与-tunnel)
 - [🔐 认证与安全](#-认证与安全)
 - [❓ 常见问题](#-常见问题)
@@ -420,6 +421,158 @@ COOKIE_SECRET=<至少32字节随机字符串>
 
 > 进阶说明：Agent 模式的安装、参数、发布与兼容策略已迁移到 `docs/agent/*`，请以文档为准。
 
+## 🗄️ ClickHouse（可选）
+
+SQLite 是 Neko Master 的默认存储引擎，对大多数用户已完全够用。  
+如果你有以下需求，可以额外启用 ClickHouse：
+
+- 数据量很大（域名 / IP 条目数十万以上）
+- 需要快速的长时间范围（≥ 7 天）聚合查询
+- 希望将历史统计数据与配置数据分层存储
+
+> ClickHouse 完全可选。SQLite 作为配置和元数据存储，无论是否启用 ClickHouse 都不会被移除。
+
+### 架构说明
+
+启用 ClickHouse 后，系统进入**双写模式**：
+
+```
+BatchBuffer.flush()
+    │
+    ├──→ SQLite（配置 / 元数据，始终写入）
+    └──→ ClickHouse（统计流量数据，双写）
+           └── Buffer 表 → SummingMergeTree 异步合并
+```
+
+读取来源由 `STATS_QUERY_SOURCE` 控制，默认仍为 `sqlite`。
+
+### 启用 ClickHouse（Docker）
+
+#### 步骤一：启动 ClickHouse 容器
+
+`docker-compose.yml` 内置了 ClickHouse 服务，通过 `profiles: [clickhouse]` 隔离。启动时加上 profile：
+
+```bash
+docker compose --profile clickhouse up -d
+```
+
+> ClickHouse 数据持久化到 `./data/clickhouse`，与主应用数据分目录存储。
+
+#### 步骤二：配置环境变量
+
+在 `.env` 中添加（与 `docker-compose.yml` 同目录）：
+
+```env
+# 开启 ClickHouse 连接
+CH_ENABLED=1
+
+# 开启双写
+CH_WRITE_ENABLED=1
+
+# 读取来源：sqlite（默认）/ auto（自动选择）/ clickhouse（强制）
+STATS_QUERY_SOURCE=auto
+
+# ClickHouse 连接信息（使用 docker-compose.yml 默认值时，以下无需修改）
+CH_HOST=clickhouse
+CH_PORT=8123
+CH_DATABASE=neko_master
+CH_USER=neko
+CH_PASSWORD=neko_master
+```
+
+重启：
+
+```bash
+docker compose --profile clickhouse up -d
+```
+
+### ClickHouse 环境变量说明
+
+| 变量名 | 默认值 | 说明 |
+| :-- | :-- | :-- |
+| `CH_ENABLED` | `0` | 是否启用 ClickHouse 连接（`1` 开启） |
+| `CH_WRITE_ENABLED` | `0` | 是否开启双写（须先开 `CH_ENABLED`） |
+| `CH_ONLY_MODE` | `0` | CH 健康时跳过 SQLite 统计写入（纯 CH 模式） |
+| `CH_HOST` | `clickhouse` | ClickHouse 主机地址 |
+| `CH_PORT` | `8123` | ClickHouse HTTP 端口 |
+| `CH_DATABASE` | `neko_master` | 数据库名称 |
+| `CH_USER` | `neko` | 用户名 |
+| `CH_PASSWORD` | `neko_master` | 密码 |
+| `CH_SECURE` | `0` | 是否使用 HTTPS 连接 |
+| `CH_REQUIRED` | `0` | CH 不可用时拒绝启动（`1` 开启） |
+| `CH_AUTO_CREATE_TABLES` | `1` | 首次启动时自动建表 |
+| `CH_WRITE_MAX_PENDING_BATCHES` | `200` | 最大写入积压批次数 |
+| `CH_UNHEALTHY_THRESHOLD` | `5` | 连续失败次数超过此值后标记为不健康，自动回退 SQLite |
+| `STATS_QUERY_SOURCE` | `sqlite` | 读取来源：`sqlite` / `auto` / `clickhouse` |
+| `CH_COMPARE_ENABLED` | `0` | 开启 SQLite ↔ ClickHouse 数据对账 |
+| `CH_EXTERNAL_HTTP_PORT` | `8123` | ClickHouse HTTP 外部端口（Compose 映射） |
+| `CH_EXTERNAL_NATIVE_PORT` | `9000` | ClickHouse Native 外部端口（Compose 映射） |
+
+> **健康回退机制**：ClickHouse 连续写入失败超过 `CH_UNHEALTHY_THRESHOLD` 次后，系统自动标记为不健康，SQLite 写入恢复（即使开启了 `CH_ONLY_MODE`）。ClickHouse 恢复正常后自动重新标记为健康。
+
+### 老用户迁移指引
+
+> 从纯 SQLite 版本升级时，**你的数据不会丢失**。  
+> SQLite 文件（`./data/stats.db`）完整保留，以下是推荐的渐进迁移路径：
+
+#### 第一阶段：双写（观察期，推荐起点）
+
+```env
+CH_ENABLED=1
+CH_WRITE_ENABLED=1
+STATS_QUERY_SOURCE=sqlite   # 继续读 SQLite，CH 在后台积累数据
+```
+
+启动并观察 `[ClickHouse Writer]` 日志确认写入正常。
+
+#### 第二阶段：切换读取来源
+
+```env
+STATS_QUERY_SOURCE=auto     # 自动选择：最近数据走 CH，历史走 SQLite
+# 或
+STATS_QUERY_SOURCE=clickhouse  # 强制读 CH
+```
+
+#### 第三阶段（可选）：迁移历史数据
+
+如需将 SQLite 历史统计数据搬入 ClickHouse：
+
+```bash
+# 标准迁移（清空 CH 后重新导入，附带对账验证）
+./scripts/ch-migrate-docker.sh
+
+# 追加模式（保留 CH 现有数据，增量导入）
+./scripts/ch-migrate-docker.sh --append
+
+# 指定时间窗口
+./scripts/ch-migrate-docker.sh --from 2026-02-01T00:00:00Z --to 2026-02-20T00:00:00Z
+```
+
+#### 第四阶段（可选）：纯 ClickHouse 模式
+
+当 ClickHouse 稳定运行后，可停止 SQLite 统计写入：
+
+```env
+CH_ONLY_MODE=1
+```
+
+> 即使在 `CH_ONLY_MODE=1` 下，若 ClickHouse 不健康，系统会自动回退到 SQLite 写入，数据不会丢失。
+
+### 回退到纯 SQLite
+
+随时可以完全回退：
+
+```env
+CH_ENABLED=0
+CH_WRITE_ENABLED=0
+CH_ONLY_MODE=0
+STATS_QUERY_SOURCE=sqlite
+```
+
+重启后恢复纯 SQLite 模式，历史数据完整保留。
+
+---
+
 ## 🌐 反向代理与 Tunnel
 
 推荐将 Web 页面与 WS 都放在同一个域名下，通过不同路径转发：`/` → `3000`，`/_cm_ws` → `3002`。
@@ -590,35 +743,6 @@ COOKIE_SECRET=<至少32字节随机字符串>
 
 3. 重置密码后，再次停止容器，去除该参数并重启，恢复正常保护模式。
 
-### ClickHouse 迁移（Docker 用户）
-
-如果你准备从 SQLite 统计迁移到 ClickHouse（保留配置仍在 SQLite），推荐直接使用一键脚本：
-
-```bash
-./scripts/ch-migrate-docker.sh
-```
-
-脚本会自动执行：
-
-1. 启动 `clickhouse` profile 容器
-2. 迁移 SQLite 数据到 ClickHouse
-3. 对账验证（默认阈值 1%）
-
-常用参数：
-
-```bash
-# 不清空 CH 历史数据，做追加导入
-./scripts/ch-migrate-docker.sh --append
-
-# 指定时间窗口迁移
-./scripts/ch-migrate-docker.sh --from 2026-02-01T00:00:00Z --to 2026-02-20T00:00:00Z
-```
-
-迁移完成后，建议将 `STATS_QUERY_SOURCE=auto` 并重启：
-
-```bash
-docker compose up -d
-```
 
 ## ❓ 常见问题
 
@@ -696,8 +820,9 @@ docker compose up -d
    中文：[`docs/architecture.md`](./docs/architecture.md)  
    English: [`docs/architecture.en.md`](./docs/architecture.en.md)
 2. **数据流详解**：Clash / Surge 两条采集链路与聚合过程
-3. **数据模型与存储**：SQLite 表结构、缓存表、保留策略
+3. **数据模型与存储**：SQLite 表结构、ClickHouse Buffer 表、保留策略
 4. **实时通道设计**：`RealtimeStore` 合并策略与 WS 推送机制
+5. **ClickHouse 模块**：双写架构、健康回退、读取路由
 
 > 该文档覆盖采集、聚合、缓存、实时推送与多后端管理的核心设计。
 
@@ -737,7 +862,7 @@ neko-master/
 
 - **前端**: Next.js 16 + React 19 + TypeScript + Tailwind CSS
 - **UI 组件**: shadcn/ui
-- **数据收集**: Node.js + Fastify + WebSocket + SQLite
+- **数据收集**: Node.js + Fastify + WebSocket + SQLite（+ ClickHouse 可选）
 - **可视化**: Recharts + D3.js
 - **国际化**: next-intl（中/英）
 - **部署**: Docker + Docker Compose

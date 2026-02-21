@@ -132,13 +132,14 @@
 │  └─────────────────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
                                            │
-                                           │ SQLite (better-sqlite3)
+                                           ├──→ SQLite (better-sqlite3) [始终写入]
+                                           └──→ ClickHouse HTTP API [可选双写]
                                            ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                                      数据存储层 (Storage)                                │
 │                                                                                          │
 │  ┌─────────────────────────────────────────────────────────────────────────────────┐   │
-│  │                     SQLite Database (WAL Mode)                                   │   │
+│  │                     SQLite Database (WAL Mode)  [始终启用]                       │   │
 │  │                                                                                  │   │
 │  │  ┌─────────────────────────────────────────────────────────────────────────┐   │   │
 │  │  │  统计表 (按 backend_id 分区)                                              │   │   │
@@ -169,6 +170,29 @@
 │  │  │  │  auth_config   │ │ retention_config│ │surge_policy_cache│             │   │   │
 │  │  │  │  (认证配置)    │ │  (保留策略)    │ │(Surge策略缓存) │               │   │   │
 │  │  │  └────────────────┘ └────────────────┘ └────────────────┘               │   │   │
+│  │  └─────────────────────────────────────────────────────────────────────────┘   │   │
+│  └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│  │              ClickHouse Database [可选，CH_ENABLED=1 时启用]                     │   │
+│  │                                                                                  │   │
+│  │  ┌─────────────────────────────────────────────────────────────────────────┐   │   │
+│  │  │  Buffer 表（异步接收写入，约 5min 合并）                                  │   │   │
+│  │  │                                                                             │   │   │
+│  │  │  ┌───────────────────────┐  ┌───────────────────────┐                   │   │   │
+│  │  │  │  traffic_detail_buffer│  │  traffic_agg_buffer   │                   │   │   │
+│  │  │  │  (连接详情)           │  │  (聚合统计)           │                   │   │   │
+│  │  │  └───────────┬───────────┘  └──────────┬────────────┘                   │   │   │
+│  │  │              │ merge                    │ merge                           │   │   │
+│  │  │              ▼                          ▼                                │   │   │
+│  │  │  ┌───────────────────────┐  ┌───────────────────────┐                   │   │   │
+│  │  │  │  traffic_detail       │  │  traffic_agg          │                   │   │   │
+│  │  │  │  (SummingMergeTree)   │  │  (SummingMergeTree)   │                   │   │   │
+│  │  │  └───────────────────────┘  └───────────────────────┘                   │   │   │
+│  │  │                                                                             │   │   │
+│  │  │  ┌───────────────────────┐                                               │   │   │
+│  │  │  │  country_buffer       │ → country_stats (SummingMergeTree)            │   │   │
+│  │  │  └───────────────────────┘                                               │   │   │
 │  │  └─────────────────────────────────────────────────────────────────────────┘   │   │
 │  └─────────────────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
@@ -236,7 +260,8 @@ ClashCollector
     │      - 批量缓存优化
     │
     ├── 4. 数据写入
-    │      ├──→ SQLite (持久化)
+    │      ├──→ SQLite (持久化，始终写入)
+    │      ├──→ ClickHouse (可选双写，CH_WRITE_ENABLED=1 时)
     │      └──→ RealtimeStore (内存实时)
     │
     └── 5. 触发广播
@@ -271,7 +296,8 @@ SurgeCollector
     │      - 30s 定时 flush
     │
     ├── 5. 数据写入
-    │      ├──→ SQLite (持久化)
+    │      ├──→ SQLite (持久化，始终写入)
+    │      ├──→ ClickHouse (可选双写，CH_WRITE_ENABLED=1 时)
     │      └──→ RealtimeStore (内存实时)
     │
     └── 6. 触发广播
@@ -288,7 +314,7 @@ WebSocketServer
     │      - 建立 ClientInfo (backend, range, interval)
     │
     ├── 数据准备
-    │      - 从 SQLite 查询基础数据
+    │      - 从 SQLite 或 ClickHouse 查询基础数据（由 STATS_QUERY_SOURCE 决定）
     │      - RealtimeStore.merge*() 合并实时增量
     │      - 摘要缓存 (2s TTL)
     │
@@ -354,16 +380,28 @@ BaseRepository (抽象基类)
     └── ... 共 13 个共享工具方法
 ```
 
-### 双写模式 (Dual Write)
+### 三写模式 (Triple Write)
 
 ```
 Collector 收到流量数据
     │
-    ├──→ SQLite (持久化存储)
-    │      └─ 用于历史查询、聚合统计
+    ├──→ SQLite (持久化存储，始终写入)
+    │      └─ 配置 / 元数据 / 统计历史（CH 不可用时自动回退）
+    │
+    ├──→ ClickHouse (可选，CH_WRITE_ENABLED=1)
+    │      └─ 流量统计双写 → Buffer 表 → SummingMergeTree 异步合并
+    │      └─ 健康回退：连续失败 CH_UNHEALTHY_THRESHOLD 次后自动回退 SQLite
     │
     └──→ RealtimeStore (内存实时)
-           └─ 用于实时展示、低延迟推送
+           └─ 用于实时展示、低延迟推送（补偿 Buffer 延迟）
+```
+
+**读取路由（STATS_QUERY_SOURCE）**
+
+```
+STATS_QUERY_SOURCE=sqlite     → 全部读 SQLite（默认）
+STATS_QUERY_SOURCE=clickhouse → 全部读 ClickHouse
+STATS_QUERY_SOURCE=auto       → 智能路由（近期走 CH，历史走 SQLite）
 ```
 
 ### 增量合并模式 (Delta Merge)
@@ -418,6 +456,72 @@ SurgeCollector
 
 ---
 
+## ClickHouse 模块设计
+
+### 写入器 (ClickHouseWriter)
+
+```
+ClickHouseWriter
+    │
+    ├── 健康状态追踪
+    │      consecutiveFailures  ── 连续失败计数
+    │      isHealthy()          ── 判断是否健康（< CH_UNHEALTHY_THRESHOLD）
+    │
+    ├── insertRows()
+    │      ├── 正常写入 → HTTP POST → ClickHouse Buffer 表
+    │      │      成功时: consecutiveFailures 清零，日志记录恢复
+    │      └── 失败时: consecutiveFailures++
+    │             达到阈值 → 标记不健康 + 告警日志
+    │
+    └── 写入积压保护
+           pendingBatches ≥ CH_WRITE_MAX_PENDING_BATCHES → 丢弃新批次
+```
+
+### 读取器 (ClickHouseReader)
+
+```
+ClickHouseReader
+    │
+    ├── query(sql)
+    │      HTTP POST body 传送 SQL（避免 URL 长度限制）
+    │      → FORMAT JSON → 解析结果集
+    │
+    └── toDateTime(value)
+           正常日期 → 格式化为 ClickHouse datetime 字符串
+           无效日期 → 取当前时间（防止 epoch 导致全表扫描）
+```
+
+### 双写调度 (BatchBuffer)
+
+```
+BatchBuffer.flush()
+    │
+    ├── 1. 评估写入模式
+    │      clickHouseWriter.isHealthy() → true
+    │          → shouldSkipSqliteStatsWrites(true) → CH_ONLY_MODE=1 时跳过 SQLite 统计写入
+    │      clickHouseWriter.isHealthy() → false
+    │          → 强制写 SQLite（无论 CH_ONLY_MODE 如何）
+    │
+    ├── 2. SQLite 写入（按模式决定是否执行）
+    │
+    └── 3. ClickHouse 写入（CH_WRITE_ENABLED=1 时并行执行）
+           写入失败 → 不影响 SQLite；错误由 Writer 内部追踪
+```
+
+### 读取路由 (StatsService)
+
+```
+STATS_QUERY_SOURCE 环境变量
+    │
+    ├── sqlite      → 全部走 SQLite Repository（默认）
+    ├── clickhouse  → 全部走 ClickHouseReader
+    └── auto        → shouldUseClickHouse()
+                       ├── 时间范围有效 → ClickHouseReader
+                       └── 时间范围无效 → SQLite（兜底）
+```
+
+---
+
 ## 认证流程 (Cookie-Based)
 
 ```
@@ -448,7 +552,9 @@ POST /api/auth/login
 | **采集** | 指数退避重试                   | 提高连接稳定性     |
 | **查询** | RealtimeStore 增量合并         | 实时数据 < 100ms   |
 | **查询** | WebSocket 摘要缓存 (2s TTL)    | 减少 70% DB 查询   |
+| **查询** | ClickHouse 列式存储（可选）    | 大时间窗口聚合提速 10x+ |
 | **存储** | SQLite WAL Mode                | 并发读写优化       |
+| **存储** | ClickHouse SummingMergeTree    | 自动去重聚合，节省存储 |
 | **存储** | 数据保留策略 (自动清理)        | 控制存储增长       |
 
 ---
@@ -524,7 +630,15 @@ neko-master/
 │       │   ├── modules/              # 业务模块
 │       │   │   ├── auth/             # 认证
 │       │   │   ├── backend/          # 后端管理
-│       │   │   ├── stats/            # 统计服务
+│       │   │   ├── clickhouse/       # ClickHouse 模块（可选）
+│       │   │   │   ├── clickhouse.config.ts   # 配置加载
+│       │   │   │   ├── clickhouse.writer.ts   # 写入器（双写 + 健康追踪）
+│       │   │   │   └── clickhouse.reader.ts   # 读取器（POST 查询）
+│       │   │   ├── collector/        # 采集核心
+│       │   │   │   └── batch-buffer.ts        # 批量缓冲 + 双写调度
+│       │   │   ├── stats/            # 统计服务（读取路由）
+│       │   │   │   ├── stats.service.ts       # 读取路由（STATS_QUERY_SOURCE）
+│       │   │   │   └── stats-write-mode.ts    # 写入模式决策
 │       │   │   ├── surge/            # Surge 服务
 │       │   │   ├── realtime/         # 实时数据
 │       │   │   └── websocket/        # WebSocket

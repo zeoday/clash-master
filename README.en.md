@@ -71,6 +71,7 @@ It is a lightweight analytics dashboard designed for modern gateway environments
 - [📖 First Use](#-first-use)
 - [🔧 Port Conflict Resolution](#-port-conflict-resolution)
 - [🐳 Docker Configuration](#-docker-configuration)
+- [🗄️ ClickHouse (Optional)](#-clickhouse-optional)
 - [🌐 Reverse Proxy & Tunnel](#-reverse-proxy--tunnel)
 - [🔐 Authentication & Security](#-authentication--security)
 - [❓ FAQ](#-faq)
@@ -429,6 +430,158 @@ Additional recommendations:
 
 > Advanced Agent details (install, config, release, compatibility) are maintained under `docs/agent/*`.
 
+## 🗄️ ClickHouse (Optional)
+
+SQLite is Neko Master's default storage engine and works well for most users.  
+Consider enabling ClickHouse if you need:
+
+- Very large datasets (hundreds of thousands of domain/IP entries)
+- Fast aggregation queries over long time ranges (≥ 7 days)
+- Separation of historical stats from configuration/metadata storage
+
+> ClickHouse is entirely optional. SQLite remains as the configuration and metadata store regardless of whether ClickHouse is enabled.
+
+### Architecture Overview
+
+When ClickHouse is enabled, the system enters **dual-write mode**:
+
+```
+BatchBuffer.flush()
+    │
+    ├──→ SQLite (config / metadata, always written)
+    └──→ ClickHouse (stats traffic data, dual-write)
+           └── Buffer tables → SummingMergeTree async merge
+```
+
+Read source is controlled by `STATS_QUERY_SOURCE` (default: `sqlite`).
+
+### Enabling ClickHouse (Docker)
+
+#### Step 1: Start the ClickHouse container
+
+The `docker-compose.yml` includes a ClickHouse service gated by `profiles: [clickhouse]`:
+
+```bash
+docker compose --profile clickhouse up -d
+```
+
+> ClickHouse data is persisted to `./data/clickhouse`, separate from the main app data directory.
+
+#### Step 2: Configure environment variables
+
+Add to your `.env` (same directory as `docker-compose.yml`):
+
+```env
+# Enable ClickHouse connection
+CH_ENABLED=1
+
+# Enable dual-write
+CH_WRITE_ENABLED=1
+
+# Read source: sqlite (default) / auto (smart routing) / clickhouse (force)
+STATS_QUERY_SOURCE=auto
+
+# ClickHouse connection (defaults match docker-compose.yml, no change needed)
+CH_HOST=clickhouse
+CH_PORT=8123
+CH_DATABASE=neko_master
+CH_USER=neko
+CH_PASSWORD=neko_master
+```
+
+Restart:
+
+```bash
+docker compose --profile clickhouse up -d
+```
+
+### ClickHouse Environment Variables
+
+| Variable | Default | Description |
+| :-- | :-- | :-- |
+| `CH_ENABLED` | `0` | Enable ClickHouse connection (`1` to enable) |
+| `CH_WRITE_ENABLED` | `0` | Enable dual-write (requires `CH_ENABLED=1`) |
+| `CH_ONLY_MODE` | `0` | When CH is healthy, skip SQLite stats writes (CH-only mode) |
+| `CH_HOST` | `clickhouse` | ClickHouse host address |
+| `CH_PORT` | `8123` | ClickHouse HTTP port |
+| `CH_DATABASE` | `neko_master` | Database name |
+| `CH_USER` | `neko` | Username |
+| `CH_PASSWORD` | `neko_master` | Password |
+| `CH_SECURE` | `0` | Use HTTPS connection |
+| `CH_REQUIRED` | `0` | Refuse to start if CH is unavailable |
+| `CH_AUTO_CREATE_TABLES` | `1` | Auto-create tables on first start |
+| `CH_WRITE_MAX_PENDING_BATCHES` | `200` | Max pending write batches |
+| `CH_UNHEALTHY_THRESHOLD` | `5` | Consecutive failures before marking unhealthy (auto-fallback to SQLite) |
+| `STATS_QUERY_SOURCE` | `sqlite` | Read source: `sqlite` / `auto` / `clickhouse` |
+| `CH_COMPARE_ENABLED` | `0` | Enable SQLite ↔ ClickHouse consistency check |
+| `CH_EXTERNAL_HTTP_PORT` | `8123` | ClickHouse HTTP external port (Compose mapping) |
+| `CH_EXTERNAL_NATIVE_PORT` | `9000` | ClickHouse Native external port (Compose mapping) |
+
+> **Health & Fallback**: After `CH_UNHEALTHY_THRESHOLD` consecutive write failures, the system automatically marks ClickHouse as unhealthy and resumes SQLite writes—even when `CH_ONLY_MODE=1`. Once ClickHouse recovers, it is re-marked healthy and logged.
+
+### Migration Guide for Existing Users
+
+> Upgrading from a SQLite-only version? **Your data is safe.**  
+> The SQLite file (`./data/stats.db`) is fully preserved. Here is the recommended gradual migration path:
+
+#### Phase 1: Dual-write (observation period, recommended starting point)
+
+```env
+CH_ENABLED=1
+CH_WRITE_ENABLED=1
+STATS_QUERY_SOURCE=sqlite   # Keep reading from SQLite while CH accumulates data
+```
+
+Start and watch `[ClickHouse Writer]` logs to confirm successful writes.
+
+#### Phase 2: Switch read source
+
+```env
+STATS_QUERY_SOURCE=auto        # Smart routing: recent data from CH, historical from SQLite
+# or
+STATS_QUERY_SOURCE=clickhouse  # Force all reads to ClickHouse
+```
+
+#### Phase 3 (optional): Migrate historical data
+
+To move historical SQLite stats into ClickHouse:
+
+```bash
+# Standard migration (truncate CH then re-import, with consistency check)
+./scripts/ch-migrate-docker.sh
+
+# Append mode (keep existing CH data, incremental import)
+./scripts/ch-migrate-docker.sh --append
+
+# Specific time window
+./scripts/ch-migrate-docker.sh --from 2026-02-01T00:00:00Z --to 2026-02-20T00:00:00Z
+```
+
+#### Phase 4 (optional): CH-only mode
+
+Once ClickHouse is running stably, stop SQLite stats writes:
+
+```env
+CH_ONLY_MODE=1
+```
+
+> Even with `CH_ONLY_MODE=1`, if ClickHouse becomes unhealthy the system automatically falls back to SQLite writes—no data loss.
+
+### Reverting to SQLite-only
+
+You can always roll back completely:
+
+```env
+CH_ENABLED=0
+CH_WRITE_ENABLED=0
+CH_ONLY_MODE=0
+STATS_QUERY_SOURCE=sqlite
+```
+
+Restart and everything returns to pure SQLite mode. Historical data remains intact.
+
+---
+
 ## 🌐 Reverse Proxy & Tunnel
 
 Recommended approach: keep Web and WS under the same domain, with path routing:
@@ -598,35 +751,6 @@ If you forgot the token, temporarily set `FORCE_ACCESS_CONTROL_OFF=true` to ente
 
 3. Reset token, then remove this flag and restart normally.
 
-### ClickHouse Migration (Docker Users)
-
-If you want to migrate stats from SQLite to ClickHouse (while keeping control/config in SQLite), use the one-command helper:
-
-```bash
-./scripts/ch-migrate-docker.sh
-```
-
-The script automatically:
-
-1. Starts services with the `clickhouse` profile
-2. Migrates SQLite stats into ClickHouse
-3. Verifies SQLite vs ClickHouse consistency (default threshold: 1%)
-
-Common options:
-
-```bash
-# Append import without truncating CH tables
-./scripts/ch-migrate-docker.sh --append
-
-# Migrate a specific time window
-./scripts/ch-migrate-docker.sh --from 2026-02-01T00:00:00Z --to 2026-02-20T00:00:00Z
-```
-
-After migration, set `STATS_QUERY_SOURCE=auto` and restart:
-
-```bash
-docker compose up -d
-```
 
 ## ❓ FAQ
 
@@ -705,8 +829,9 @@ If you want to quickly understand the system design depth, read in this order:
    Chinese: [`docs/architecture.md`](./docs/architecture.md)  
    English: [`docs/architecture.en.md`](./docs/architecture.en.md)
 2. **Data Flow**: Clash / Surge collection pipelines and aggregation
-3. **Data Model & Storage**: SQLite schema, cache tables, retention
+3. **Data Model & Storage**: SQLite schema, ClickHouse Buffer tables, retention policy
 4. **Realtime Channel Design**: `RealtimeStore` merge strategy and WS push
+5. **ClickHouse Module**: dual-write architecture, health fallback, read routing
 
 > This documentation covers the core design of collection, aggregation, caching, realtime push, and multi-backend management.
 
@@ -749,7 +874,7 @@ neko-master/
 - **Charts**: [Recharts](https://recharts.org/)
 - **i18n**: [next-intl](https://next-intl-docs.vercel.app/)
 - **Backend**: [Node.js](https://nodejs.org/) + [Fastify](https://www.fastify.io/) + WebSocket
-- **Database**: [SQLite](https://www.sqlite.org/) ([better-sqlite3](https://github.com/WiseLibs/better-sqlite3))
+- **Database**: [SQLite](https://www.sqlite.org/) ([better-sqlite3](https://github.com/WiseLibs/better-sqlite3)) + [ClickHouse](https://clickhouse.com/) (optional)
 - **Build**: [pnpm](https://pnpm.io/) + [Turborepo](https://turbo.build/)
 
 ## 🤝 Contributing

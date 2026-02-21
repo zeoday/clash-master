@@ -134,7 +134,9 @@ export class StatsService {
           return `${name}=ch:${counts.clickhouse},sqlite:${counts.sqlite},ch_rate:${chRate.toFixed(1)}%`;
         })
         .join(' | ');
-      // Stats route metrics logging removed
+      console.info(
+        `[StatsService] Route metrics: ${parts} window_sec=${(elapsedMs / 1000).toFixed(1)}`,
+      );
     }
 
     this.routeMetricsWindowStartedAt = now;

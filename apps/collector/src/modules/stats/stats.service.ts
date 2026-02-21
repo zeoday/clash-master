@@ -134,7 +134,7 @@ export class StatsService {
           return `${name}=ch:${counts.clickhouse},sqlite:${counts.sqlite},ch_rate:${chRate.toFixed(1)}%`;
         })
         .join(' | ');
-      console.info(`[Stats Route Metrics] ${parts} window_sec=${(elapsedMs / 1000).toFixed(1)}`);
+      // Stats route metrics logging removed
     }
 
     this.routeMetricsWindowStartedAt = now;
@@ -1136,7 +1136,7 @@ export class StatsService {
     // Get proxy config for Agent mode to enrich short chains
     const agentConfig = this.realtimeStore.getAgentConfig(backendId);
     const proxyConfig = agentConfig?.proxies;
-    console.info(`[StatsService.getRuleChainFlow] backendId: ${backendId}, rule: ${rule}, agentConfig exists: ${!!agentConfig}, proxyConfig keys: ${proxyConfig ? Object.keys(proxyConfig).length : 0}`);
+    // Rule chain flow request logging removed
     return this.db.getRuleChainFlow(backendId, rule, timeRange.start, timeRange.end, realtimeRows, proxyConfig);
   }
 
@@ -1178,7 +1178,7 @@ export class StatsService {
     // Get proxy config for Agent mode to enrich short chains
     const agentConfig = this.realtimeStore.getAgentConfig(backendId);
     const proxyConfig = agentConfig?.proxies;
-    console.info(`[StatsService.getAllRuleChainFlows] backendId: ${backendId}, agentConfig exists: ${!!agentConfig}, proxyConfig keys: ${proxyConfig ? Object.keys(proxyConfig).length : 0}`);
+    // All rule chain flows request logging removed
     return this.db.getAllRuleChainFlows(backendId, timeRange.start, timeRange.end, realtimeRows, proxyConfig);
   }
 

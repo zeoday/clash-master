@@ -263,18 +263,13 @@ export abstract class BaseRepository {
       return [];
     }
 
-    // Debug logging for Agent mode chain enrichment
-    if (proxyConfig && chainParts.length < 3) {
-      console.info(`[buildRuleFlowPath] Rule: ${rule}, Chain: ${chain}, Parts: ${JSON.stringify(chainParts)}, ProxyConfig keys: ${Object.keys(proxyConfig).length}`);
-    }
+    // Debug logging removed to reduce noise in production
 
     // Enrich chain with proxy config if available and chain is short
     let enrichedParts = chainParts;
     if (proxyConfig && chainParts.length < 3) {
       enrichedParts = this.enrichChainWithProxyConfig(chainParts, proxyConfig);
-      if (enrichedParts.length > chainParts.length) {
-        console.info(`[buildRuleFlowPath] Enriched: ${JSON.stringify(chainParts)} -> ${JSON.stringify(enrichedParts)}`);
-      }
+      // Chain enrichment result logging removed
     }
 
     // Try to find rule in enriched chain
@@ -324,9 +319,7 @@ export abstract class BaseRepository {
       return chainParts;
     }
 
-    // Debug: log proxyConfig sample
-    const sampleEntries = Object.entries(proxyConfig).slice(0, 3);
-    console.info(`[enrichChain] chainParts: ${JSON.stringify(chainParts)}, proxyConfig sample: ${JSON.stringify(sampleEntries)}`);
+    // Debug logging removed to reduce noise in production
 
     // Build complete path by tracing backwards through proxy config
     const completePath = [...chainParts];
@@ -342,7 +335,7 @@ export abstract class BaseRepository {
       let foundParent = false;
       for (const [name, config] of Object.entries(proxyConfig)) {
         if (config.now === current && !visited.has(name)) {
-          console.info(`[enrichChain] Found parent: ${name}.now = ${config.now} (current: ${current})`);
+          // Parent found in proxy config
           completePath.push(name);
           visited.add(name);
           current = name;
@@ -351,8 +344,7 @@ export abstract class BaseRepository {
         }
       }
       if (!foundParent) {
-        console.info(`[enrichChain] No parent found for current: ${current}`);
-        break;
+        break; // No parent found
       }
       iterations++;
     }
@@ -367,13 +359,10 @@ export abstract class BaseRepository {
       
       // Current completePath: [finalProxy, group1, group2] (where group2.now = group1, group1.now = finalProxy)
       // We want: [group2, group1, finalProxy] for proper flow path
-      const result = completePath.reverse();
-      console.info(`[enrichChain] Result: ${JSON.stringify(result)}`);
-      return result;
+      return completePath.reverse();
     }
 
-    console.info(`[enrichChain] No enrichment possible, returning original`);
-    return chainParts;
+    return chainParts; // No enrichment possible
   }
 
   /**

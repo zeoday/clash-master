@@ -156,7 +156,7 @@ export class StatsWebSocketServer {
     });
 
     this.wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
-      console.log(`[WebSocket] Connection attempt from ${req.socket.remoteAddress}`);
+      // Connection attempt logging removed to reduce noise
 
       // Verify authentication
       try {
@@ -179,14 +179,14 @@ export class StatsWebSocketServer {
         // Check if auth is required and verify token
         if (this.authService.isAuthRequired()) {
           if (!token) {
-            console.log(`[WebSocket] Rejected connection from ${req.socket.remoteAddress}: Missing token or cookie`);
+            // Missing token rejected (logging removed)
             ws.close(4001, 'Authentication required');
             return;
           }
 
           const verifyResult = await this.authService.verifyToken(token);
           if (!verifyResult.valid) {
-            console.log(`[WebSocket] Rejected connection from ${req.socket.remoteAddress}: Invalid token`);
+            // Invalid token rejected (logging removed)
             ws.close(4003, 'Invalid token');
             return;
           }
@@ -197,8 +197,7 @@ export class StatsWebSocketServer {
         return;
       }
 
-      console.log(`[WebSocket] connection authorized from ${req.socket.remoteAddress}`);
-      console.log(`[WebSocket] Client connected, total: ${this.clients.size + 1}`);
+      // Client connected (logging removed to reduce noise in production)
 
       const clientInfo: ClientInfo = {
         ws,
@@ -238,7 +237,7 @@ export class StatsWebSocketServer {
                 if (clientInfo.backendId !== msg.backendId) {
                   clientInfo.backendId = msg.backendId;
                   changed = true;
-                  console.log(`[WebSocket] Client subscribed to backend: ${backend.name} (ID: ${msg.backendId})`);
+                  // Client subscribed to backend (logging removed)
                 }
               } else {
                 console.warn(`[WebSocket] Client tried to subscribe to non-existent backend: ${msg.backendId}`);
@@ -404,7 +403,7 @@ export class StatsWebSocketServer {
 
       ws.on('close', () => {
         this.clients.delete(ws);
-        console.log(`[WebSocket] Client disconnected, remaining: ${this.clients.size}`);
+        // Client disconnected (logging removed to reduce noise)
       });
 
       ws.on('error', (err) => {
@@ -1075,7 +1074,7 @@ export class StatsWebSocketServer {
     if (sentCount > 0) {
       this.wsMetrics.broadcastSentClients += sentCount;
       this.maybeLogWsMetrics();
-      console.log(`[WebSocket] Broadcasted stats to ${sentCount} clients`);
+      // Broadcast log removed to reduce noise in production
     }
   }
 

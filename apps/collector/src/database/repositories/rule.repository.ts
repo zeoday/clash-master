@@ -433,11 +433,11 @@ export class RuleRepository extends BaseRepository {
         FROM rule_chain_traffic WHERE backend_id = ? ORDER BY rule, chain
       `);
       rows = stmt.all(backendId) as typeof rows;
-      console.info(`[getAllRuleChainFlows] DB rows count: ${rows.length}, sample: ${JSON.stringify(rows.slice(0, 2))}`);
+      // DB query result logging removed
     }
 
     if (realtimeRows) {
-      console.info(`[getAllRuleChainFlows] realtimeRows count: ${realtimeRows.length}, sample: ${JSON.stringify(realtimeRows.slice(0, 2))}`);
+      // Realtime rows logging removed
       for (const rt of realtimeRows) {
         const index = rows.findIndex((r) => r.rule === rt.rule && r.chain === rt.chain);
         if (index >= 0) {
@@ -474,10 +474,7 @@ export class RuleRepository extends BaseRepository {
       }
 
       const flowPath = this.buildRuleFlowPathWithConfig(rule, row.chain, proxyConfig);
-      // Debug: log first few rows
-      if (rows.indexOf(row) < 3) {
-        console.info(`[getAllRuleChainFlows] Row ${rows.indexOf(row)}: rule=${rule}, chain=${row.chain}, flowPath=${JSON.stringify(flowPath)}`);
-      }
+      // Row processing debug logging removed
       if (flowPath.length < 2) continue;
 
       for (let i = 0; i < flowPath.length; i++) {

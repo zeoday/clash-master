@@ -391,7 +391,7 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
     }
 
     const result = await service.getRuleStatsWithRouting(backendId, timeRange);
-    console.info(`[Stats API /rules] backendId: ${backendId}, rules count: ${result.length}, sample:`, result.slice(0, 3));
+    // Stats API response logging removed
     return result;
   });
 

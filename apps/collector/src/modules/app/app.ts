@@ -103,7 +103,8 @@ export async function createApp(options: AppOptions) {
   } = options;
   
   // Create Fastify instance
-  const app = Fastify({ logger });
+  // Increase body limit to 5MB for agent config sync (large Clash/Surge configs)
+  const app = Fastify({ logger, bodyLimit: 5 * 1024 * 1024 });
 
   // Register CORS
   await app.register(cors, {
@@ -523,8 +524,6 @@ export async function createApp(options: AppOptions) {
         }
       }
 
-      // Debug log for chain data
-      console.info(`[Agent Report] Chain data: chains=${JSON.stringify(update.chains)}, rule=${update.rule}, domain=${update.domain}`);
 
       realtimeStore.recordTraffic(
         backendId,
@@ -613,12 +612,12 @@ export async function createApp(options: AppOptions) {
   app.post('/api/agent/config', async (request, reply) => {
     const body = request.body as AgentConfigPayload;
     const backendId = parseBackendId(body?.backendId);
-    console.info(`[Agent Config] Received config for backendId: ${backendId}, agentId: ${body?.agentId}`);
+    // Agent config received (log removed to reduce noise)
     if (backendId === null) {
       return reply.status(400).send({ error: 'Invalid backendId' });
     }
     if (!isAgentBackendAuthorized(backendId, request, reply)) {
-      console.info(`[Agent Config] Backend not authorized: ${backendId}`);
+      // Backend not authorized (error returned to client)
       return;
     }
     const agentId = parseAgentId(body.agentId);
@@ -626,7 +625,7 @@ export async function createApp(options: AppOptions) {
       return reply.status(400).send({ error: 'Invalid agentId' });
     }
     if (!isAgentBindingAllowed(backendId, agentId, reply)) {
-      console.info(`[Agent Config] Binding not allowed for agent: ${agentId}`);
+      // Agent binding not allowed (error returned to client)
       return;
     }
 
@@ -634,7 +633,7 @@ export async function createApp(options: AppOptions) {
       return reply.status(400).send({ error: 'Missing config payload' });
     }
 
-    console.info(`[Agent Config] Storing config for backendId: ${backendId}, proxies count: ${Object.keys(body.config?.proxies || {}).length}`);
+    // Config stored successfully (log removed to reduce noise)
     realtimeStore.setAgentConfig(backendId, body.config);
 
     return { success: true, backendId, hash: body.config.hash };
@@ -644,12 +643,12 @@ export async function createApp(options: AppOptions) {
   app.post('/api/agent/policy-state', async (request, reply) => {
     const body = request.body as { backendId: number; agentId: string; policyState: { proxies: Record<string, unknown>; providers: Record<string, unknown>; timestamp: number } };
     const backendId = parseBackendId(body?.backendId);
-    console.info(`[Agent Policy State] Received policy state for backendId: ${backendId}, agentId: ${body?.agentId}`);
+    // Agent policy state received (log removed to reduce noise)
     if (backendId === null) {
       return reply.status(400).send({ error: 'Invalid backendId' });
     }
     if (!isAgentBackendAuthorized(backendId, request, reply)) {
-      console.info(`[Agent Policy State] Backend not authorized: ${backendId}`);
+      // Backend not authorized (error returned to client)
       return;
     }
 
@@ -657,7 +656,7 @@ export async function createApp(options: AppOptions) {
       return reply.status(400).send({ error: 'Missing policyState payload' });
     }
 
-    console.info(`[Agent Policy State] Storing policy state for backendId: ${backendId}, proxies count: ${Object.keys(body.policyState?.proxies || {}).length}`);
+    // Policy state stored successfully (log removed to reduce noise)
     realtimeStore.setAgentPolicyState(backendId, body.policyState as import('../realtime/realtime.store.js').AgentPolicyState);
 
     return { success: true, backendId, timestamp: body.policyState.timestamp };
@@ -666,7 +665,7 @@ export async function createApp(options: AppOptions) {
   // Compatibility routes: Gateway APIs
   app.get('/api/gateway/proxies', async (request, reply) => {
     const backendId = getBackendIdFromQuery(request.query as Record<string, unknown>);
-    console.info(`[Gateway API /proxies] backendId: ${backendId}`);
+    // Gateway API /proxies called (log removed to reduce noise)
     if (backendId === null) {
       return reply.status(404).send({ error: 'No backend specified or active' });
     }
@@ -953,7 +952,7 @@ export async function createApp(options: AppOptions) {
           .map(r => r.raw ? parseSurgeRule(r.raw) : null)
           .filter((r): r is NonNullable<typeof r> => r !== null)
           .map(r => ({ type: r.type, payload: r.payload, proxy: r.policy, size: 0 }));
-        console.info(`[Gateway API /rules] Agent mode Surge rules count: ${parsedRules.length}, sample:`, parsedRules.slice(0, 3));
+        // Agent mode Surge rules logging removed
         return { rules: parsedRules, _source: 'agent-cache' };
       }
       

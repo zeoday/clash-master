@@ -47,7 +47,7 @@ import { useGatewayRules } from "@/hooks/api/use-rules";
 interface MergedChainNode {
   name: string;
   layer: number;
-  nodeType: "rule" | "group" | "proxy";
+  nodeType: "rule" | "group" | "proxy" | "direct";
   totalUpload: number;
   totalDownload: number;
   totalConnections: number;
@@ -89,28 +89,41 @@ const MergedAnimatedFlowEdge = memo(function MergedAnimatedFlowEdge({
   const edgeData = data as
     | {
         isToProxy?: boolean;
+        isToDirect?: boolean;
         dimmed?: boolean;
         showAll?: boolean;
         _zeroTraffic?: boolean;
       }
     | undefined;
   const isToProxy = edgeData?.isToProxy;
+  const isToDirect = edgeData?.isToDirect;
   const dimmed = edgeData?.dimmed;
   const showAll = edgeData?.showAll;
   const zeroTraffic = edgeData?._zeroTraffic;
   const [edgePath] = getStraightPath({ sourceX, sourceY, targetX, targetY });
 
-  const dotColor = zeroTraffic ? "#9CA3AF" : isToProxy ? "#34d399" : "#a5b4fc";
+  // Color logic: DIRECT = orange/red, PROXY = green, others = indigo
+  const dotColor = zeroTraffic
+    ? "#9CA3AF"
+    : isToDirect
+      ? "#fb923c" // orange-400
+      : isToProxy
+        ? "#34d399" // emerald-400
+        : "#a5b4fc"; // indigo-300
   const trackColor = zeroTraffic
     ? "rgba(156, 163, 175, 0.1)"
-    : isToProxy
-      ? "rgba(16, 185, 129, 0.12)"
-      : "rgba(129, 140, 248, 0.12)";
+    : isToDirect
+      ? "rgba(251, 146, 60, 0.15)" // orange
+      : isToProxy
+        ? "rgba(16, 185, 129, 0.12)" // emerald
+        : "rgba(129, 140, 248, 0.12)"; // indigo
   const lineColor = zeroTraffic
     ? "rgba(156, 163, 175, 0.25)"
-    : isToProxy
-      ? "rgba(16, 185, 129, 0.3)"
-      : "rgba(129, 140, 248, 0.3)";
+    : isToDirect
+      ? "rgba(251, 146, 60, 0.4)" // orange
+      : isToProxy
+        ? "rgba(16, 185, 129, 0.3)" // emerald
+        : "rgba(129, 140, 248, 0.3)"; // indigo
 
   // Keep motion only for active traffic links.
   // Panorama and focused mode share the same three-dot particle style.
@@ -174,6 +187,7 @@ const MergedAnimatedFlowEdge = memo(function MergedAnimatedFlowEdge({
   const pd = prev.data as Record<string, unknown> | undefined;
   const nd = next.data as Record<string, unknown> | undefined;
   if (pd?.isToProxy !== nd?.isToProxy) return false;
+  if (pd?.isToDirect !== nd?.isToDirect) return false;
   if (pd?.dimmed !== nd?.dimmed) return false;
   if (pd?.showAll !== nd?.showAll) return false;
   if (pd?._zeroTraffic !== nd?._zeroTraffic) return false;
@@ -267,6 +281,44 @@ const MergedChainNodeComponent = memo(function MergedChainNodeComponent({
             position={Position.Right}
             className="!w-2 !h-2 !bg-indigo-300 !border-indigo-400"
           />
+        </div>
+      </div>
+    );
+  }
+
+  // DIRECT node - orange/amber theme (treated as exit node like PROXY)
+  if (data.nodeType === "direct") {
+    return (
+      <div className="relative" style={wrapStyle}>
+        <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-orange-500 text-white text-[9px] font-semibold tracking-wider z-10 shadow-sm">
+          DIRECT
+        </div>
+        <div className="relative px-5 py-3.5 rounded-xl border border-orange-400/50 bg-gradient-to-br from-orange-50 to-amber-50/50 dark:from-orange-500/15 dark:to-orange-500/5 min-w-[170px] shadow-md shadow-orange-500/10 ring-1 ring-orange-500/10">
+          <Handle
+            type="target"
+            position={Position.Left}
+            className="!w-2.5 !h-2.5 !bg-orange-400 !border-orange-500"
+          />
+          <div className="flex items-center gap-2.5 mb-2">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white bg-gradient-to-br from-orange-400 to-orange-600 shadow-sm">
+              <Server className="h-4 w-4" />
+            </div>
+            <span
+              className={cn(
+                "text-xs font-semibold truncate flex-1 text-orange-800 dark:text-orange-200 max-w-[120px]",
+                isWindows && "emoji-flag-font",
+              )}>
+              {data.name}
+            </span>
+          </div>
+          <div className="flex items-center gap-3 text-[11px]">
+            <span className="text-orange-600 dark:text-orange-400">
+              ↓ {formatBytes(data.totalDownload)}
+            </span>
+            <span className="text-orange-500/70 dark:text-orange-400/60">
+              ↑ {formatBytes(data.totalUpload)}
+            </span>
+          </div>
         </div>
       </div>
     );
@@ -415,7 +467,7 @@ function sortStringArray(values: string[]): string[] {
 function nodeTypeRank(type: MergedChainNode["nodeType"]): number {
   if (type === "rule") return 0;
   if (type === "group") return 1;
-  return 2;
+  return 2; // proxy and direct both have highest rank
 }
 
 // Normalize node/link ordering to keep index mapping stable across pushes.
@@ -593,8 +645,46 @@ function FlowRenderer({
       if (!layerGroups.has(node.layer)) layerGroups.set(node.layer, []);
       layerGroups.get(node.layer)!.push(idx);
     });
+
+    // Identify direct links (rule -> proxy/direct without intermediate groups)
+    // These will be placed at the edges to avoid overlapping with complex chains
+    const directLinkNodeIndices = new Set<number>();
+    // Track which direct links are DIRECT policy (special, goes to bottom)
+    const directIsDirectPolicy = new Set<number>();
+    for (const link of data.links) {
+      const sourceNode = data.nodes[link.source];
+      const targetNode = data.nodes[link.target];
+      // Direct link: source is rule, target is proxy/direct (no groups in between)
+      if (sourceNode?.nodeType === "rule" && 
+          (targetNode?.nodeType === "proxy" || targetNode?.nodeType === "direct")) {
+        directLinkNodeIndices.add(link.source);
+        directLinkNodeIndices.add(link.target);
+        // Check if this is a DIRECT policy link (target is DIRECT)
+        if (targetNode?.name === 'DIRECT' || targetNode?.nodeType === 'direct') {
+          directIsDirectPolicy.add(link.source);
+          directIsDirectPolicy.add(link.target);
+        }
+      }
+    }
+
+    // Sort order: rule direct (top) -> normal (middle) -> DIRECT (bottom)
+    function getNodeSortPriority(idx: number): number {
+      const isDirectLink = directLinkNodeIndices.has(idx);
+      const isDirectPolicy = directIsDirectPolicy.has(idx);
+      if (isDirectPolicy) return 2;      // Bottom: DIRECT special
+      if (isDirectLink) return 0;         // Top: rule direct links
+      return 1;                           // Middle: normal nodes
+    }
+
     for (const [, indices] of layerGroups) {
       indices.sort((a, b) => {
+        const aPriority = getNodeSortPriority(a);
+        const bPriority = getNodeSortPriority(b);
+        // Different priorities: sort by priority
+        if (aPriority !== bPriority) {
+          return aPriority - bPriority;
+        }
+        // Within same category, sort by traffic
         const at = data.nodes[a].totalUpload + data.nodes[a].totalDownload;
         const bt = data.nodes[b].totalUpload + data.nodes[b].totalDownload;
         return bt - at;
@@ -617,6 +707,12 @@ function FlowRenderer({
       // Position active nodes: single → y=0, multiple → fanned vertically around y=0
       for (const [layer, indices] of activeByLayer) {
         indices.sort((a, b) => {
+          // In focused mode: rule direct (top) -> normal (middle) -> DIRECT (bottom)
+          const aPriority = getNodeSortPriority(a);
+          const bPriority = getNodeSortPriority(b);
+          if (aPriority !== bPriority) {
+            return aPriority - bPriority;
+          }
           const at = data.nodes[a].totalUpload + data.nodes[a].totalDownload;
           const bt = data.nodes[b].totalUpload + data.nodes[b].totalDownload;
           return bt - at;
@@ -680,6 +776,7 @@ function FlowRenderer({
       const targetNode = data.nodes[link.target];
       const sourceNode = data.nodes[link.source];
       const isToProxy = targetNode?.nodeType === "proxy";
+      const isToDirect = targetNode?.nodeType === "direct";
       const isDimmed = activeLinkSet ? !activeLinkSet.has(idx) : false;
       const isZeroTraffic = !!(
         sourceNode?._zeroTraffic || targetNode?._zeroTraffic
@@ -691,6 +788,7 @@ function FlowRenderer({
         type: "mergedAnimatedFlow",
         data: {
           isToProxy,
+          isToDirect,
           dimmed: isDimmed,
           showAll,
           _zeroTraffic: isZeroTraffic,
@@ -1120,7 +1218,12 @@ function UnifiedRuleChainFlowInner({
     for (const idx of keepNodeIndices) {
       const node = data.nodes[idx];
       nameToNewIdx.set(node.name, newNodes.length);
-      newNodes.push({ ...node });
+      // Convert DIRECT nodes to "direct" type for special rendering and positioning
+      const isDirect = node.name === 'DIRECT';
+      newNodes.push({
+        ...node,
+        nodeType: isDirect ? "direct" : node.nodeType,
+      });
     }
 
     // Second: add zero-traffic nodes for active chain members not in existing data
@@ -1153,11 +1256,12 @@ function UnifiedRuleChainFlowInner({
       for (let i = 0; i < chain.length; i++) {
         const name = chain[i];
         if (!nameToNewIdx.has(name)) {
-          // Special built-in policies that are not actual proxies
-          const isBuiltInPolicy = name === 'DIRECT' || name === 'REJECT' || name === 'REJECT-TINY';
+          // Special built-in policies: DIRECT is treated as exit node (like proxy), REJECT is group
+          const isDirect = name === 'DIRECT';
+          const isReject = name === 'REJECT' || name === 'REJECT-TINY';
           const isLastNode = i === chain.length - 1;
-          const nodeType: "rule" | "group" | "proxy" =
-            i === 0 ? "rule" : (isLastNode && !isBuiltInPolicy) ? "proxy" : "group";
+          const nodeType: "rule" | "group" | "proxy" | "direct" =
+            i === 0 ? "rule" : isDirect ? "direct" : (isLastNode && !isReject) ? "proxy" : "group";
           nameToNewIdx.set(name, newNodes.length);
           newNodes.push({
             name,
@@ -1339,9 +1443,9 @@ function UnifiedRuleChainFlowInner({
     // Ensure minimum depth to separate Rule -> Proxy
     if (maxLayer < 2) maxLayer = 2; // At least Rule(0) -> Gap(1) -> Proxy(2)
 
-    // 2. Force all "proxy" nodes to be at maxLayer
+    // 2. Force all "proxy" and "direct" nodes to be at maxLayer (exit nodes on the rightmost column)
     for (const n of newNodes) {
-        if (n.nodeType === 'proxy') {
+        if (n.nodeType === 'proxy' || n.nodeType === 'direct') {
             n.layer = maxLayer;
         }
     }

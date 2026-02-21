@@ -206,7 +206,16 @@ function sortIPs(data: IPStats[], sortBy: string, sortOrder: 'asc' | 'desc'): IP
   });
 }
 
+export type AgentGatewayConfig = {
+  rules: Array<{ type: string; payload: string; proxy: string; raw?: string }>;
+  proxies: Record<string, { name: string; type: string; now?: string }>;
+  providers: Record<string, { proxies: Array<{ name: string; type: string; now?: string }> }>;
+  timestamp: number;
+  hash: string;
+};
+
 export class RealtimeStore {
+  private agentConfigByBackend = new Map<number, AgentGatewayConfig>();
   public summaryByBackend = new Map<number, SummaryDelta>();
   public minuteByBackend = new Map<number, Map<string, MinuteBucket>>();
   public domainByBackend = new Map<number, Map<string, DomainDelta>>();
@@ -228,6 +237,14 @@ export class RealtimeStore {
 
   constructor(maxMinutes = parseInt(process.env.REALTIME_MAX_MINUTES || '180', 10)) {
     this.maxMinutes = Number.isFinite(maxMinutes) ? Math.max(30, maxMinutes) : 180;
+  }
+
+  setAgentConfig(backendId: number, config: AgentGatewayConfig): void {
+    this.agentConfigByBackend.set(backendId, config);
+  }
+
+  getAgentConfig(backendId: number): AgentGatewayConfig | undefined {
+    return this.agentConfigByBackend.get(backendId);
   }
 
   recordTraffic(

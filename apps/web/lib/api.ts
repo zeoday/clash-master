@@ -167,7 +167,7 @@ export interface GatewayRule {
 export interface GatewayRulesResponse {
   rules: GatewayRule[];
   // Surge specific fields
-  _source?: 'surge' | 'clash';
+  _source?: 'surge' | 'clash' | 'agent-cache';
   _availablePolicies?: string[];
 }
 

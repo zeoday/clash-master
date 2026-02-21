@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,6 +44,12 @@ type heartbeatPayload struct {
 	GatewayURL      string `json:"gatewayUrl,omitempty"`
 }
 
+type configPayload struct {
+	BackendID int                           `json:"backendId"`
+	AgentID   string                        `json:"agentId"`
+	Config    *domain.GatewayConfigSnapshot `json:"config"`
+}
+
 type Runner struct {
 	cfg           config.Config
 	httpClient    *http.Client
@@ -53,6 +60,8 @@ type Runner struct {
 	queue   []domain.TrafficUpdate
 	flows   map[string]trackedFlow
 	dropped int64
+
+	lastConfigHash string
 }
 
 func NewRunner(cfg config.Config) *Runner {
@@ -76,10 +85,11 @@ func (r *Runner) Run(ctx context.Context) {
 	log.Printf("[agent:%s] starting, backend=%d, gateway_type=%s, server=%s", r.cfg.AgentID, r.cfg.BackendID, r.cfg.GatewayType, r.cfg.ServerAPIBase)
 
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 	go r.runCollectorLoop(ctx, &wg)
 	go r.runReportLoop(ctx, &wg)
 	go r.runHeartbeatLoop(ctx, &wg)
+	go r.runConfigSyncLoop(ctx, &wg)
 
 	<-ctx.Done()
 	log.Printf("[agent:%s] stopping...", r.cfg.AgentID)
@@ -161,6 +171,61 @@ func (r *Runner) runHeartbeatLoop(ctx context.Context, wg *sync.WaitGroup) {
 			}
 		}
 	}
+}
+
+func (r *Runner) runConfigSyncLoop(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	// Initial sync immediately
+	if err := r.syncConfig(ctx); err != nil {
+		log.Printf("[agent:%s] init config sync error: %v", r.cfg.AgentID, err)
+	}
+
+	// Then every 5 minutes (or reuse heartbeat interval)
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := r.syncConfig(ctx); err != nil {
+				log.Printf("[agent:%s] config sync error: %v", r.cfg.AgentID, err)
+			}
+		}
+	}
+}
+
+func (r *Runner) syncConfig(ctx context.Context) error {
+	snap, err := r.gatewayClient.GetConfigSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Calculate a simple hash to avoid sending if unmodified
+	data, _ := json.Marshal(snap)
+	hash := fmt.Sprintf("%x", md5.Sum(data))
+	if hash == r.lastConfigHash {
+		return nil
+	}
+	snap.Hash = hash
+	snap.Timestamp = time.Now().UnixMilli()
+
+	payload := configPayload{
+		BackendID: r.cfg.BackendID,
+		AgentID:   r.cfg.AgentID,
+		Config:    snap,
+	}
+
+	if err := r.postJSON(ctx, "/agent/config", payload); err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	r.lastConfigHash = hash
+	r.mu.Unlock()
+	return nil
 }
 
 func (r *Runner) ingestSnapshots(snapshots []domain.FlowSnapshot, nowMs int64) {

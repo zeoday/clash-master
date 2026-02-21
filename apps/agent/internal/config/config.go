@@ -181,11 +181,7 @@ func normalizeGatewayEndpoint(gatewayType, raw string) string {
 	if gatewayType == "clash" {
 		trimmed = strings.Replace(trimmed, "ws://", "http://", 1)
 		trimmed = strings.Replace(trimmed, "wss://", "https://", 1)
-		trimmed = strings.TrimSuffix(trimmed, "/connections")
-		return trimmed + "/connections"
+		return strings.TrimSuffix(trimmed, "/connections")
 	}
-	if strings.HasSuffix(trimmed, "/v1/requests/recent") {
-		return trimmed
-	}
-	return trimmed + "/v1/requests/recent"
+	return strings.TrimSuffix(trimmed, "/v1/requests/recent")
 }

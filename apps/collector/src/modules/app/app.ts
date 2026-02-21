@@ -58,6 +58,18 @@ type AgentTrafficUpdatePayload = {
   timestampMs?: number;
 };
 
+type AgentConfigPayload = {
+  backendId?: number | string;
+  agentId?: string;
+  config: {
+    rules: Array<{ type: string; payload: string; proxy: string; raw?: string }>;
+    proxies: Record<string, { name: string; type: string; now?: string }>;
+    providers: Record<string, { proxies: Array<{ name: string; type: string; now?: string }> }>;
+    timestamp: number;
+    hash: string;
+  };
+};
+
 type AgentHeartbeatPayload = {
   backendId?: number;
   agentId?: string;
@@ -580,6 +592,32 @@ export async function createApp(options: AppOptions) {
     };
   });
 
+  app.post('/api/agent/config', async (request, reply) => {
+    const body = request.body as AgentConfigPayload;
+    const backendId = parseBackendId(body?.backendId);
+    if (backendId === null) {
+      return reply.status(400).send({ error: 'Invalid backendId' });
+    }
+    if (!isAgentBackendAuthorized(backendId, request, reply)) {
+      return;
+    }
+    const agentId = parseAgentId(body.agentId);
+    if (!agentId) {
+      return reply.status(400).send({ error: 'Invalid agentId' });
+    }
+    if (!isAgentBindingAllowed(backendId, agentId, reply)) {
+      return;
+    }
+
+    if (!body.config) {
+      return reply.status(400).send({ error: 'Missing config payload' });
+    }
+
+    realtimeStore.setAgentConfig(backendId, body.config);
+
+    return { success: true, backendId, hash: body.config.hash };
+  });
+
   // Compatibility routes: Gateway APIs
   app.get('/api/gateway/proxies', async (request, reply) => {
     const backendId = getBackendIdFromQuery(request.query as Record<string, unknown>);
@@ -592,7 +630,11 @@ export async function createApp(options: AppOptions) {
       return reply.status(404).send({ error: 'Backend not found' });
     }
     if (isAgentBackendUrl(backend.url)) {
-      return reply.status(400).send({ error: 'Agent mode backend does not support gateway passthrough APIs' });
+      const cached = realtimeStore.getAgentConfig(backendId);
+      if (!cached) {
+        return reply.status(503).send({ error: 'Agent config not yet synced' });
+      }
+      return { proxies: cached.proxies || {}, _source: 'agent-cache' };
     }
 
     const gatewayBaseUrl = getGatewayBaseUrl(backend.url);
@@ -677,7 +719,11 @@ export async function createApp(options: AppOptions) {
       return reply.status(404).send({ error: 'Backend not found' });
     }
     if (isAgentBackendUrl(backend.url)) {
-      return reply.status(400).send({ error: 'Agent mode backend does not support gateway passthrough APIs' });
+      const cached = realtimeStore.getAgentConfig(backendId);
+      if (!cached) {
+        return reply.status(503).send({ error: 'Agent config not yet synced' });
+      }
+      return { providers: cached.providers || {}, proxies: cached.proxies || {}, _source: 'agent-cache' };
     }
 
     const gatewayBaseUrl = getGatewayBaseUrl(backend.url);
@@ -850,7 +896,20 @@ export async function createApp(options: AppOptions) {
       return reply.status(404).send({ error: 'Backend not found' });
     }
     if (isAgentBackendUrl(backend.url)) {
-      return reply.status(400).send({ error: 'Agent mode backend does not support gateway passthrough APIs' });
+      const cached = realtimeStore.getAgentConfig(backendId);
+      if (!cached) {
+        return reply.status(503).send({ error: 'Agent config not yet synced' });
+      }
+      
+      if (backend.type === 'surge') {
+        const parsedRules = (cached.rules || [])
+          .map(r => r.raw ? parseSurgeRule(r.raw) : null)
+          .filter((r): r is NonNullable<typeof r> => r !== null)
+          .map(r => ({ type: r.type, payload: r.payload, proxy: r.policy, size: 0 }));
+        return { rules: parsedRules, _source: 'agent-cache' };
+      }
+      
+      return { rules: cached.rules || [], _source: 'agent-cache' };
     }
 
     const gatewayBaseUrl = getGatewayBaseUrl(backend.url);
@@ -948,6 +1007,7 @@ export async function createApp(options: AppOptions) {
       '/api/auth/logout', // Add logout as public so we can clear cookies even if invalid
       '/api/agent/heartbeat',
       '/api/agent/report',
+      '/api/agent/config',
     ];
     
     // Check if route is public

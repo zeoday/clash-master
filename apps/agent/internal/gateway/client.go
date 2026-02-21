@@ -168,7 +168,7 @@ type surgeRequestsResponse struct {
 }
 
 func (c *Client) collectClash(ctx context.Context) ([]domain.FlowSnapshot, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint+"/connections", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +222,7 @@ func (c *Client) collectClash(ctx context.Context) ([]domain.FlowSnapshot, error
 }
 
 func (c *Client) collectSurge(ctx context.Context) ([]domain.FlowSnapshot, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint+"/v1/requests/recent", nil)
 	if err != nil {
 		return nil, err
 	}

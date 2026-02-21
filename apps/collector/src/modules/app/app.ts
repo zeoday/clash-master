@@ -15,6 +15,7 @@ import type { TrafficUpdate } from '../db/db.js';
 import { SurgePolicySyncService } from '../surge/surge-policy-sync.js';
 import { getClickHouseWriter } from '../clickhouse/clickhouse.writer.js';
 import { shouldSkipSqliteStatsWrites } from '../stats/stats-write-mode.js';
+import type { GeoIPService, GeoLocation } from '../geo/geo.service.js';
 
 // Import modules
 import { BackendService, backendController } from '../backend/index.js';
@@ -38,6 +39,7 @@ export interface AppOptions {
   realtimeStore: RealtimeStore;
   logger?: boolean;
   policySyncService?: SurgePolicySyncService;
+  geoService?: GeoIPService;
   autoListen?: boolean;
   onTrafficIngested?: (backendId: number) => void;
   onBackendDataCleared?: (backendId: number) => void;
@@ -82,6 +84,7 @@ export async function createApp(options: AppOptions) {
     realtimeStore,
     logger = false,
     policySyncService,
+    geoService,
     autoListen = true,
     onTrafficIngested,
     onBackendDataCleared,
@@ -464,7 +467,35 @@ export async function createApp(options: AppOptions) {
     if (clickHouseWriter.isEnabled()) {
       clickHouseWriter.writeTrafficBatch(backendId, updates);
     }
+
+    const geoBatchByIp = new Map<
+      string,
+      {
+        upload: number;
+        download: number;
+        connections: number;
+        timestampMs: number;
+      }
+    >();
+
     for (const update of updates) {
+      if (update.ip && update.ip !== '0.0.0.0' && update.ip !== '::') {
+        const existing = geoBatchByIp.get(update.ip);
+        if (existing) {
+          existing.upload += update.upload;
+          existing.download += update.download;
+          existing.connections += 1;
+          existing.timestampMs = Math.max(existing.timestampMs, update.timestampMs || 0);
+        } else {
+          geoBatchByIp.set(update.ip, {
+            upload: update.upload,
+            download: update.download,
+            connections: 1,
+            timestampMs: update.timestampMs || Date.now(),
+          });
+        }
+      }
+
       realtimeStore.recordTraffic(
         backendId,
         {
@@ -480,6 +511,56 @@ export async function createApp(options: AppOptions) {
         1,
         update.timestampMs || Date.now(),
       );
+    }
+
+    if (geoBatchByIp.size > 0 && geoService) {
+      // Process in background without blocking the agent response
+      Promise.all(
+        Array.from(geoBatchByIp.entries()).map(async ([ip, stats]) => {
+          try {
+            const geo = await geoService.getGeoLocation(ip);
+            return { ip, stats, geo };
+          } catch {
+            return { ip, stats, geo: null };
+          }
+        }),
+      )
+        .then((results) => {
+          const countryUpdates = results
+            .filter((r): r is { ip: string; stats: typeof r.stats; geo: GeoLocation } => r.geo !== null)
+            .map((r) => {
+              realtimeStore.recordCountryTraffic(
+                backendId,
+                r.geo,
+                r.stats.upload,
+                r.stats.download,
+                r.stats.connections,
+                r.stats.timestampMs,
+              );
+              return {
+                country: r.geo.country || 'Unknown',
+                countryName: r.geo.country_name || r.geo.country || 'Unknown',
+                continent: r.geo.continent || 'Unknown',
+                upload: r.stats.upload,
+                download: r.stats.download,
+                timestampMs: r.stats.timestampMs,
+              };
+            });
+
+          if (countryUpdates.length > 0) {
+            if (!skipSqliteStatsWrites) {
+              db.batchUpdateCountryStats(backendId, countryUpdates);
+            }
+            if (clickHouseWriter.isEnabled()) {
+              clickHouseWriter.writeCountryBatch(backendId, countryUpdates).catch((err) => {
+                console.error(`[Agent:${backendId}] ClickHouse country batch write failed:`, err);
+              });
+            }
+          }
+        })
+        .catch((err) => {
+          console.error(`[Agent:${backendId}] Background GeoIP batch processing failed:`, err);
+        });
     }
 
     db.upsertAgentHeartbeat({
@@ -926,6 +1007,7 @@ export class APIServer {
   private realtimeStore: RealtimeStore;
   private port: number;
   private policySyncService?: SurgePolicySyncService;
+  private geoService?: GeoIPService;
   private onTrafficIngested?: (backendId: number) => void;
   private onBackendDataCleared?: (backendId: number) => void;
 
@@ -934,6 +1016,7 @@ export class APIServer {
     db: StatsDatabase, 
     realtimeStore: RealtimeStore,
     policySyncService?: SurgePolicySyncService,
+    geoService?: GeoIPService,
     onTrafficIngested?: (backendId: number) => void,
     onBackendDataCleared?: (backendId: number) => void,
   ) {
@@ -941,6 +1024,7 @@ export class APIServer {
     this.db = db;
     this.realtimeStore = realtimeStore;
     this.policySyncService = policySyncService;
+    this.geoService = geoService;
     this.onTrafficIngested = onTrafficIngested;
     this.onBackendDataCleared = onBackendDataCleared;
   }
@@ -951,6 +1035,7 @@ export class APIServer {
       db: this.db,
       realtimeStore: this.realtimeStore,
       policySyncService: this.policySyncService,
+      geoService: this.geoService,
       onTrafficIngested: this.onTrafficIngested,
       onBackendDataCleared: this.onBackendDataCleared,
       logger: false,

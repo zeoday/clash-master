@@ -82,6 +82,7 @@ async function main() {
     db,
     realtimeStore,
     policySyncService,
+    geoService,
     (backendId: number) => {
       wsServer.broadcastStats(backendId);
     },

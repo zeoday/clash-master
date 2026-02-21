@@ -1233,23 +1233,30 @@ export class StatsService {
     timeRange: TimeRange,
     limit: number,
   ): Promise<CountryStats[]> {
+    const queryRange = this.resolveQueryRange(timeRange, 24 * 60);
     const shouldUseCH =
-      timeRange.active &&
-      this.clickHouseReader.shouldUseForRange(timeRange.start, timeRange.end);
+      !!queryRange &&
+      this.clickHouseReader.shouldUseForRange(queryRange.start, queryRange.end);
 
-    const stats =
-      shouldUseCH && timeRange.start && timeRange.end
-        ? await this.clickHouseReader.getCountryStats(
-            backendId,
-            limit,
-            timeRange.start,
-            timeRange.end,
-          )
-        : null;
-    const resolvedStats =
-      stats || this.db.getCountryStats(backendId, limit, timeRange.start, timeRange.end);
-    this.recordRoute('countries', stats ? 'clickhouse' : 'sqlite');
+    if (shouldUseCH && queryRange) {
+      const chStats = await this.clickHouseReader.getCountryStats(
+        backendId,
+        limit,
+        queryRange.start,
+        queryRange.end,
+      );
+      if (chStats) {
+        this.recordRoute('countries', 'clickhouse');
+        if (this.shouldIncludeRealtime(timeRange)) {
+          return this.realtimeStore.mergeCountryStats(backendId, chStats);
+        }
+        return chStats;
+      }
+    }
 
+    this.failIfStrictFallback('countries');
+    this.recordRoute('countries', 'sqlite');
+    const resolvedStats = this.db.getCountryStats(backendId, limit, timeRange.start, timeRange.end);
     if (this.shouldIncludeRealtime(timeRange)) {
       return this.realtimeStore.mergeCountryStats(backendId, resolvedStats);
     }

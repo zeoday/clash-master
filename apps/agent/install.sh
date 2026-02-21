@@ -192,10 +192,7 @@ main() {
 	arch="$(normalize_arch)"
 
 	# Check if nekoagent is already installed
-	existing_agent=""
-	if detect_existing_install; then
-		existing_agent="$(detect_existing_install)"
-	fi
+	existing_agent="$(detect_existing_install || true)"
 
 	# If already installed, just add the new instance
 	if [ -n "$existing_agent" ] && [ "${NEKO_FORCE_INSTALL:-false}" != "true" ]; then
@@ -323,14 +320,19 @@ main() {
 	fi
 
 	# Use the newly installed nekoagent to add instance
-	"$cli_target" add "$NEKO_INSTANCE_NAME" \
+	set -- add "$NEKO_INSTANCE_NAME" \
 		--server-url "$NEKO_SERVER" \
 		--backend-id "$NEKO_BACKEND_ID" \
 		--backend-token "$NEKO_BACKEND_TOKEN" \
 		--gateway-type "$NEKO_GATEWAY_TYPE" \
-		--gateway-url "$NEKO_GATEWAY_URL" \
-		$(if [ -n "$NEKO_GATEWAY_TOKEN" ]; then echo "--gateway-token $NEKO_GATEWAY_TOKEN"; fi) \
-		$(if [ "$NEKO_AUTO_START" = "true" ]; then echo "--auto-start"; fi)
+		--gateway-url "$NEKO_GATEWAY_URL"
+	if [ -n "$NEKO_GATEWAY_TOKEN" ]; then
+		set -- "$@" --gateway-token "$NEKO_GATEWAY_TOKEN"
+	fi
+	if [ "$NEKO_AUTO_START" = "true" ]; then
+		set -- "$@" --auto-start
+	fi
+	"$cli_target" "$@"
 
 	echo "[neko-agent] installed to: $install_target"
 	echo "[neko-agent] management cli: $cli_target"

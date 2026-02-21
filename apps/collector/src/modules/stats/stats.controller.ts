@@ -390,7 +390,9 @@ const statsController: FastifyPluginAsync = async (fastify: FastifyInstance): Pr
       return reply.status(404).send({ error: 'No backend specified or active' });
     }
 
-    return await service.getRuleStatsWithRouting(backendId, timeRange);
+    const result = await service.getRuleStatsWithRouting(backendId, timeRange);
+    console.info(`[Stats API /rules] backendId: ${backendId}, rules count: ${result.length}, sample:`, result.slice(0, 3));
+    return result;
   });
 
   // Get domains for a specific rule

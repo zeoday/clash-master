@@ -165,6 +165,9 @@ func (c *Client) getSurgeConfig(ctx context.Context) (*domain.GatewayConfigSnaps
 	}
 
 	for i, raw := range rulesData.Rules {
+		if i < 3 {
+			fmt.Printf("[agent] rule %d: %s\n", i, raw)
+		}
 		snap.Rules[i] = parseSurgeRuleForAgent(raw)
 	}
 
@@ -180,12 +183,15 @@ func (c *Client) getSurgeConfig(ctx context.Context) (*domain.GatewayConfigSnaps
 			Type   string `json:"type"`
 			Policy string `json:"policy"`
 		}
-		_ = c.getJSON(ctx, "/v1/policies/"+url.PathEscape(g), &groupDetail)
+		if err := c.getJSON(ctx, "/v1/policies/"+url.PathEscape(g), &groupDetail); err != nil {
+			fmt.Printf("[agent] warning: failed to get policy detail for %s: %v\n", g, err)
+		}
 		snap.Proxies[g] = domain.GatewayProxy{
 			Name: g,
 			Type: groupDetail.Type,
 			Now:  groupDetail.Policy,
 		}
+		fmt.Printf("[agent] policy group: %s, type: %s, now: %s\n", g, groupDetail.Type, groupDetail.Policy)
 	}
 
 	return snap, nil

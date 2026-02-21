@@ -381,6 +381,17 @@ export async function createApp(options: AppOptions) {
       return true;
     }
 
+    // Allow rebinding if the existing agent has been offline for a while
+    // Use a longer timeout (60s) than the health check to avoid race conditions
+    const AGENT_BINDING_TIMEOUT_MS = 60000;
+    const lastSeenMs = new Date(heartbeat.lastSeen).getTime();
+    const ageMs = Number.isFinite(lastSeenMs) ? Math.max(0, Date.now() - lastSeenMs) : Number.POSITIVE_INFINITY;
+    
+    if (Number.isFinite(ageMs) && ageMs > AGENT_BINDING_TIMEOUT_MS) {
+      console.info(`[Agent] Allowing rebinding for backend ${backendId}: previous agent '${heartbeat.agentId}' offline for ${Math.round(ageMs / 1000)}s`);
+      return true;
+    }
+
     reply.status(409).send({
       error: `Agent token is already bound to '${heartbeat.agentId}'. Rotate token before binding '${agentId}'.`,
       code: 'AGENT_TOKEN_ALREADY_BOUND',
@@ -508,6 +519,9 @@ export async function createApp(options: AppOptions) {
         }
       }
 
+      // Debug log for chain data
+      console.info(`[Agent Report] Chain data: chains=${JSON.stringify(update.chains)}, rule=${update.rule}, domain=${update.domain}`);
+
       realtimeStore.recordTraffic(
         backendId,
         {
@@ -595,10 +609,12 @@ export async function createApp(options: AppOptions) {
   app.post('/api/agent/config', async (request, reply) => {
     const body = request.body as AgentConfigPayload;
     const backendId = parseBackendId(body?.backendId);
+    console.info(`[Agent Config] Received config for backendId: ${backendId}, agentId: ${body?.agentId}`);
     if (backendId === null) {
       return reply.status(400).send({ error: 'Invalid backendId' });
     }
     if (!isAgentBackendAuthorized(backendId, request, reply)) {
+      console.info(`[Agent Config] Backend not authorized: ${backendId}`);
       return;
     }
     const agentId = parseAgentId(body.agentId);
@@ -606,6 +622,7 @@ export async function createApp(options: AppOptions) {
       return reply.status(400).send({ error: 'Invalid agentId' });
     }
     if (!isAgentBindingAllowed(backendId, agentId, reply)) {
+      console.info(`[Agent Config] Binding not allowed for agent: ${agentId}`);
       return;
     }
 
@@ -613,6 +630,7 @@ export async function createApp(options: AppOptions) {
       return reply.status(400).send({ error: 'Missing config payload' });
     }
 
+    console.info(`[Agent Config] Storing config for backendId: ${backendId}, proxies count: ${Object.keys(body.config?.proxies || {}).length}`);
     realtimeStore.setAgentConfig(backendId, body.config);
 
     return { success: true, backendId, hash: body.config.hash };
@@ -621,6 +639,7 @@ export async function createApp(options: AppOptions) {
   // Compatibility routes: Gateway APIs
   app.get('/api/gateway/proxies', async (request, reply) => {
     const backendId = getBackendIdFromQuery(request.query as Record<string, unknown>);
+    console.info(`[Gateway API /proxies] backendId: ${backendId}`);
     if (backendId === null) {
       return reply.status(404).send({ error: 'No backend specified or active' });
     }
@@ -631,6 +650,7 @@ export async function createApp(options: AppOptions) {
     }
     if (isAgentBackendUrl(backend.url)) {
       const cached = realtimeStore.getAgentConfig(backendId);
+      console.info(`[Gateway API /proxies] Agent mode, cached exists: ${!!cached}`);
       if (!cached) {
         return reply.status(503).send({ error: 'Agent config not yet synced' });
       }
@@ -906,6 +926,7 @@ export async function createApp(options: AppOptions) {
           .map(r => r.raw ? parseSurgeRule(r.raw) : null)
           .filter((r): r is NonNullable<typeof r> => r !== null)
           .map(r => ({ type: r.type, payload: r.payload, proxy: r.policy, size: 0 }));
+        console.info(`[Gateway API /rules] Agent mode Surge rules count: ${parsedRules.length}, sample:`, parsedRules.slice(0, 3));
         return { rules: parsedRules, _source: 'agent-cache' };
       }
       

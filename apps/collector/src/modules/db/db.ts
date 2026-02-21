@@ -754,8 +754,8 @@ export class StatsDatabase {
   }
   getRuleIPProxyStats(backendId: number, rule: string, ip: string, start?: string, end?: string) { return this.repos.rule.getRuleIPProxyStats(backendId, rule, ip, start, end); }
   getRuleIPDomainDetails(backendId: number, rule: string, ip: string, start?: string, end?: string, limit?: number) { return this.repos.rule.getRuleIPDomainDetails(backendId, rule, ip, start, end, limit); }
-  getRuleChainFlow(backendId: number, rule: string, start?: string, end?: string, realtimeRows?: Array<{ rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>) { return this.repos.rule.getRuleChainFlow(backendId, rule, start, end, realtimeRows); }
-  getAllRuleChainFlows(backendId: number, start?: string, end?: string, realtimeRows?: Array<{ rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>) { return this.repos.rule.getAllRuleChainFlows(backendId, start, end, realtimeRows); }
+  getRuleChainFlow(backendId: number, rule: string, start?: string, end?: string, realtimeRows?: Array<{ rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>, proxyConfig?: Record<string, { now?: string }>) { return this.repos.rule.getRuleChainFlow(backendId, rule, start, end, realtimeRows, proxyConfig); }
+  getAllRuleChainFlows(backendId: number, start?: string, end?: string, realtimeRows?: Array<{ rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>, proxyConfig?: Record<string, { now?: string }>) { return this.repos.rule.getAllRuleChainFlows(backendId, start, end, realtimeRows, proxyConfig); }
 
   // ==================== Private helpers (kept for getSummary) ====================
   private toMinuteKey(date: Date): string {

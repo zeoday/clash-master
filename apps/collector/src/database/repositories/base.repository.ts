@@ -246,20 +246,63 @@ export abstract class BaseRepository {
    * Build a normalized rule flow path in "rule -> ... -> proxy" order
    */
   protected buildRuleFlowPath(rule: string, chain: string): string[] {
+    return this.buildRuleFlowPathWithConfig(rule, chain, undefined);
+  }
+
+  /**
+   * Build a normalized rule flow path with proxy config enrichment.
+   * For Agent mode, uses proxy config (with 'now' field) to complete short chains.
+   */
+  protected buildRuleFlowPathWithConfig(
+    rule: string, 
+    chain: string, 
+    proxyConfig: Record<string, { now?: string }> | undefined,
+  ): string[] {
     const chainParts = this.splitChainParts(chain);
     if (chainParts.length === 0) {
       return [];
     }
 
-    const ruleIndex = this.findRuleIndexInChain(chainParts, rule);
+    // Debug logging for Agent mode chain enrichment
+    if (proxyConfig && chainParts.length < 3) {
+      console.info(`[buildRuleFlowPath] Rule: ${rule}, Chain: ${chain}, Parts: ${JSON.stringify(chainParts)}, ProxyConfig keys: ${Object.keys(proxyConfig).length}`);
+    }
+
+    // Enrich chain with proxy config if available and chain is short
+    let enrichedParts = chainParts;
+    if (proxyConfig && chainParts.length < 3) {
+      enrichedParts = this.enrichChainWithProxyConfig(chainParts, proxyConfig);
+      if (enrichedParts.length > chainParts.length) {
+        console.info(`[buildRuleFlowPath] Enriched: ${JSON.stringify(chainParts)} -> ${JSON.stringify(enrichedParts)}`);
+      }
+    }
+
+    // Try to find rule in enriched chain
+    const ruleIndex = this.findRuleIndexInChain(enrichedParts, rule);
     if (ruleIndex !== -1) {
       // Full chain stored as proxy > ... > rule, reverse to rule > ... > proxy.
-      return chainParts.slice(0, ruleIndex + 1).reverse();
+      return enrichedParts.slice(0, ruleIndex + 1).reverse();
+    }
+
+    // If rule not in chain but we enriched it, build path: rule -> ... -> proxy
+    // enrichedParts is already in order: [ruleGroup, middleGroup, finalProxy]
+    if (enrichedParts.length > chainParts.length) {
+      // Check if first element could be the rule target
+      const normalizedRule = this.normalizeFlowLabel(rule);
+      const normalizedFirst = this.normalizeFlowLabel(enrichedParts[0] || "");
+      
+      // If rule matches first element or rule is parent of first element
+      if (normalizedRule === normalizedFirst) {
+        return enrichedParts;
+      }
+      
+      // Otherwise prepend rule: rule -> enrichedParts
+      return [rule, ...enrichedParts];
     }
 
     // Fallback for mismatched labels or minute_dim rows:
     // normalize direction to rule/group -> ... -> proxy.
-    const reversed = [...chainParts].reverse();
+    const reversed = [...enrichedParts].reverse();
     const normalizedRule = this.normalizeFlowLabel(rule);
     const normalizedHead = this.normalizeFlowLabel(reversed[0] || "");
     if (normalizedRule && normalizedRule === normalizedHead) {
@@ -267,6 +310,70 @@ export abstract class BaseRepository {
     }
 
     return [rule, ...reversed];
+  }
+
+  /**
+   * Enrich a short chain using proxy config to build complete policy path.
+   * For Surge Agent mode: traces back from final proxy through policy groups using 'now' field.
+   */
+  private enrichChainWithProxyConfig(
+    chainParts: string[], 
+    proxyConfig: Record<string, { now?: string }>,
+  ): string[] {
+    if (chainParts.length === 0) {
+      return chainParts;
+    }
+
+    // Debug: log proxyConfig sample
+    const sampleEntries = Object.entries(proxyConfig).slice(0, 3);
+    console.info(`[enrichChain] chainParts: ${JSON.stringify(chainParts)}, proxyConfig sample: ${JSON.stringify(sampleEntries)}`);
+
+    // Build complete path by tracing backwards through proxy config
+    const completePath = [...chainParts];
+    const visited = new Set<string>(chainParts);
+    
+    // Start from the last element and trace back using 'now' references
+    let current = chainParts[chainParts.length - 1];
+    let iterations = 0;
+    const maxIterations = 10; // Prevent infinite loops
+
+    while (current && iterations < maxIterations) {
+      // Find which policy group points to current as its 'now' selection
+      let foundParent = false;
+      for (const [name, config] of Object.entries(proxyConfig)) {
+        if (config.now === current && !visited.has(name)) {
+          console.info(`[enrichChain] Found parent: ${name}.now = ${config.now} (current: ${current})`);
+          completePath.push(name);
+          visited.add(name);
+          current = name;
+          foundParent = true;
+          break;
+        }
+      }
+      if (!foundParent) {
+        console.info(`[enrichChain] No parent found for current: ${current}`);
+        break;
+      }
+      iterations++;
+    }
+
+    // If we enriched the chain, reverse to get correct order (rule -> ... -> proxy)
+    if (completePath.length > chainParts.length) {
+      // The chain is stored as [finalProxy, ...], we need to reverse to get [..., rule]
+      // But actually we want: rule -> group -> finalProxy
+      // Proxy config gives us: group -> finalProxy (via now field)
+      // So we reverse to get: finalProxy -> group
+      // Then the caller will reverse again... let's return in correct order
+      
+      // Current completePath: [finalProxy, group1, group2] (where group2.now = group1, group1.now = finalProxy)
+      // We want: [group2, group1, finalProxy] for proper flow path
+      const result = completePath.reverse();
+      console.info(`[enrichChain] Result: ${JSON.stringify(result)}`);
+      return result;
+    }
+
+    console.info(`[enrichChain] No enrichment possible, returning original`);
+    return chainParts;
   }
 
   /**

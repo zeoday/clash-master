@@ -306,6 +306,7 @@ export class RuleRepository extends BaseRepository {
   getRuleChainFlow(
     backendId: number, rule: string, start?: string, end?: string,
     realtimeRows?: Array<{ rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>,
+    proxyConfig?: Record<string, { now?: string }>,
   ): { nodes: Array<{ name: string; totalUpload: number; totalDownload: number; totalConnections: number }>; links: Array<{ source: number; target: number }> } {
     const range = this.parseMinuteRange(start, end);
     let rows: Array<{ chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>;
@@ -363,7 +364,7 @@ export class RuleRepository extends BaseRepository {
     const linkSet = new Set<string>();
 
     for (const row of rows) {
-      const flowPath = this.buildRuleFlowPath(rule, row.chain);
+      const flowPath = this.buildRuleFlowPathWithConfig(rule, row.chain, proxyConfig);
       if (flowPath.length < 2) continue;
       for (let i = 0; i < flowPath.length; i++) {
         const nodeName = flowPath[i];
@@ -400,6 +401,7 @@ export class RuleRepository extends BaseRepository {
   getAllRuleChainFlows(
     backendId: number, start?: string, end?: string,
     realtimeRows?: Array<{ rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>,
+    proxyConfig?: Record<string, { now?: string }>,
   ): {
     nodes: Array<{ name: string; layer: number; nodeType: 'rule' | 'group' | 'proxy'; totalUpload: number; totalDownload: number; totalConnections: number; rules: string[] }>;
     links: Array<{ source: number; target: number; rules: string[] }>;
@@ -431,9 +433,11 @@ export class RuleRepository extends BaseRepository {
         FROM rule_chain_traffic WHERE backend_id = ? ORDER BY rule, chain
       `);
       rows = stmt.all(backendId) as typeof rows;
+      console.info(`[getAllRuleChainFlows] DB rows count: ${rows.length}, sample: ${JSON.stringify(rows.slice(0, 2))}`);
     }
 
     if (realtimeRows) {
+      console.info(`[getAllRuleChainFlows] realtimeRows count: ${realtimeRows.length}, sample: ${JSON.stringify(realtimeRows.slice(0, 2))}`);
       for (const rt of realtimeRows) {
         const index = rows.findIndex((r) => r.rule === rt.rule && r.chain === rt.chain);
         if (index >= 0) {
@@ -469,7 +473,11 @@ export class RuleRepository extends BaseRepository {
         rulePathLinks.set(rule, new Set());
       }
 
-      const flowPath = this.buildRuleFlowPath(rule, row.chain);
+      const flowPath = this.buildRuleFlowPathWithConfig(rule, row.chain, proxyConfig);
+      // Debug: log first few rows
+      if (rows.indexOf(row) < 3) {
+        console.info(`[getAllRuleChainFlows] Row ${rows.indexOf(row)}: rule=${rule}, chain=${row.chain}, flowPath=${JSON.stringify(flowPath)}`);
+      }
       if (flowPath.length < 2) continue;
 
       for (let i = 0; i < flowPath.length; i++) {

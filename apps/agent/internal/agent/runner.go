@@ -176,12 +176,32 @@ func (r *Runner) runHeartbeatLoop(ctx context.Context, wg *sync.WaitGroup) {
 func (r *Runner) runConfigSyncLoop(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	// Initial sync immediately
-	if err := r.syncConfig(ctx); err != nil {
-		log.Printf("[agent:%s] init config sync error: %v", r.cfg.AgentID, err)
+	// Initial sync with retry for binding conflicts
+	// If server returns 409 (already bound), retry with backoff
+	maxRetries := 5
+	for i := 0; i < maxRetries; i++ {
+		err := r.syncConfig(ctx)
+		if err == nil {
+			log.Printf("[agent:%s] config synced successfully", r.cfg.AgentID)
+			break
+		}
+		if i == maxRetries-1 {
+			log.Printf("[agent:%s] init config sync failed after %d retries: %v", r.cfg.AgentID, maxRetries, err)
+		} else {
+			// Check if it's a binding conflict (409)
+			if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "AGENT_TOKEN_ALREADY_BOUND") {
+				backoff := time.Duration(i+1) * 5 * time.Second
+				log.Printf("[agent:%s] config sync binding conflict, retrying in %v... (%d/%d)", r.cfg.AgentID, backoff, i+1, maxRetries)
+				time.Sleep(backoff)
+			} else {
+				// Non-binding error, log and continue with ticker
+				log.Printf("[agent:%s] init config sync error: %v", r.cfg.AgentID, err)
+				break
+			}
+		}
 	}
 
-	// Then every 5 minutes (or reuse heartbeat interval)
+	// Then every 2 minutes
 	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 

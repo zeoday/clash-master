@@ -1133,7 +1133,11 @@ export class StatsService {
    */
   getRuleChainFlow(backendId: number, rule: string, timeRange: TimeRange): any {
     const realtimeRows = this.shouldIncludeRealtime(timeRange) ? this.realtimeStore.getRuleChainRows(backendId) : undefined;
-    return this.db.getRuleChainFlow(backendId, rule, timeRange.start, timeRange.end, realtimeRows);
+    // Get proxy config for Agent mode to enrich short chains
+    const agentConfig = this.realtimeStore.getAgentConfig(backendId);
+    const proxyConfig = agentConfig?.proxies;
+    console.info(`[StatsService.getRuleChainFlow] backendId: ${backendId}, rule: ${rule}, agentConfig exists: ${!!agentConfig}, proxyConfig keys: ${proxyConfig ? Object.keys(proxyConfig).length : 0}`);
+    return this.db.getRuleChainFlow(backendId, rule, timeRange.start, timeRange.end, realtimeRows, proxyConfig);
   }
 
   async getRuleChainFlowWithRouting(
@@ -1143,6 +1147,9 @@ export class StatsService {
   ): Promise<any> {
     const shouldUseCH = this.shouldUseClickHouseForOptionalRange(timeRange);
     const realtimeRows = this.shouldIncludeRealtime(timeRange) ? this.realtimeStore.getRuleChainRows(backendId) : undefined;
+    // Get proxy config for Agent mode to enrich short chains
+    const agentConfig = this.realtimeStore.getAgentConfig(backendId);
+    const proxyConfig = agentConfig?.proxies;
     
     if (shouldUseCH) {
       const ch = await this.clickHouseReader.getRuleChainFlow(
@@ -1160,7 +1167,7 @@ export class StatsService {
 
     this.failIfStrictFallback('rules.chain-flow');
     this.recordRoute('rules.chain-flow', 'sqlite');
-    return this.db.getRuleChainFlow(backendId, rule, timeRange.start, timeRange.end, realtimeRows);
+    return this.db.getRuleChainFlow(backendId, rule, timeRange.start, timeRange.end, realtimeRows, proxyConfig);
   }
 
   /**
@@ -1168,7 +1175,11 @@ export class StatsService {
    */
   getAllRuleChainFlows(backendId: number, timeRange: TimeRange): any {
     const realtimeRows = this.shouldIncludeRealtime(timeRange) ? this.realtimeStore.getRuleChainRows(backendId) : undefined;
-    return this.db.getAllRuleChainFlows(backendId, timeRange.start, timeRange.end, realtimeRows);
+    // Get proxy config for Agent mode to enrich short chains
+    const agentConfig = this.realtimeStore.getAgentConfig(backendId);
+    const proxyConfig = agentConfig?.proxies;
+    console.info(`[StatsService.getAllRuleChainFlows] backendId: ${backendId}, agentConfig exists: ${!!agentConfig}, proxyConfig keys: ${proxyConfig ? Object.keys(proxyConfig).length : 0}`);
+    return this.db.getAllRuleChainFlows(backendId, timeRange.start, timeRange.end, realtimeRows, proxyConfig);
   }
 
   async getAllRuleChainFlowsWithRouting(
@@ -1177,6 +1188,9 @@ export class StatsService {
   ): Promise<any> {
     const shouldUseCH = this.shouldUseClickHouseForOptionalRange(timeRange);
     const realtimeRows = this.shouldIncludeRealtime(timeRange) ? this.realtimeStore.getRuleChainRows(backendId) : undefined;
+    // Get proxy config for Agent mode to enrich short chains
+    const agentConfig = this.realtimeStore.getAgentConfig(backendId);
+    const proxyConfig = agentConfig?.proxies;
     
     if (shouldUseCH) {
       const ch = await this.clickHouseReader.getAllRuleChainFlows(
@@ -1193,7 +1207,7 @@ export class StatsService {
 
     this.failIfStrictFallback('rules.chain-flow-all');
     this.recordRoute('rules.chain-flow-all', 'sqlite');
-    return this.db.getAllRuleChainFlows(backendId, timeRange.start, timeRange.end, realtimeRows);
+    return this.db.getAllRuleChainFlows(backendId, timeRange.start, timeRange.end, realtimeRows, proxyConfig);
   }
 
   /**

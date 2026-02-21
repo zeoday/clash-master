@@ -141,6 +141,48 @@ export class StatsService {
     this.routeMetrics = {};
   }
 
+  private populateGeoIPs(_backendId: number, ipStats: IPStats[]): IPStats[] {
+    if (!ipStats || ipStats.length === 0) return ipStats;
+
+    const ipsToLookup = Array.from(new Set(ipStats.map(s => s.ip).filter(Boolean)));
+    if (ipsToLookup.length === 0) return ipStats;
+
+    const cachedGeos = this.db.getIPGeolocations(ipsToLookup);
+
+    const geoMap = new Map<string, IPStats['geoIP']>();
+    const asnMap = new Map<string, string>();
+
+    for (const ip of ipsToLookup) {
+      const cached = cachedGeos[ip];
+      if (!cached) continue;
+
+      const countryCode = typeof cached.country === 'string' ? cached.country : '';
+      const countryName =
+        typeof cached.country_name === 'string' ? cached.country_name : countryCode;
+      const city = typeof cached.city === 'string' ? cached.city : '';
+      const asOrganization = typeof cached.as_name === 'string' ? cached.as_name : '';
+      const asn = typeof cached.asn === 'string' ? cached.asn : '';
+
+      if (countryCode || countryName || city || asOrganization) {
+        geoMap.set(ip, {
+          countryCode,
+          countryName,
+          city,
+          asOrganization,
+        });
+      }
+      if (asn) {
+        asnMap.set(ip, asn);
+      }
+    }
+
+    return ipStats.map((stat) => ({
+      ...stat,
+      geoIP: stat.ip ? (geoMap.get(stat.ip) || stat.geoIP) : stat.geoIP,
+      asn: stat.ip ? (asnMap.get(stat.ip) || stat.asn) : stat.asn,
+    }));
+  }
+
   /**
    * Resolve backend ID from query param or active backend fallback
    */
@@ -354,9 +396,10 @@ export class StatsService {
       ? this.realtimeStore.mergeTopDomains(backendId, topDomainsCH, 10)
       : topDomainsCH;
 
+    const populatedTopIPsCH = this.populateGeoIPs(backendId, topIPsCH);
     const topIPs = includeRealtime
-      ? this.realtimeStore.mergeTopIPs(backendId, topIPsCH, 10)
-      : topIPsCH;
+      ? this.realtimeStore.mergeTopIPs(backendId, populatedTopIPsCH, 10)
+      : populatedTopIPsCH;
 
     const proxyStats = includeRealtime
       ? this.realtimeStore.mergeProxyStats(backendId, proxyStatsCH)
@@ -528,6 +571,10 @@ export class StatsService {
           )
         : null;
 
+    if (stats) {
+      stats.data = this.populateGeoIPs(backendId, stats.data);
+    }
+
     const resolvedStats =
       stats ||
       this.db.getIPStatsPaginated(backendId, {
@@ -630,7 +677,7 @@ export class StatsService {
       );
       if (ch) {
         this.recordRoute('domains.ip-details', 'clickhouse');
-        return ch;
+        return this.populateGeoIPs(backendId, ch);
       }
     }
     this.recordRoute('domains.ip-details', 'sqlite');
@@ -792,7 +839,7 @@ export class StatsService {
     limit: number,
   ): Promise<IPStats[]> {
     const shouldUseCH = this.shouldUseClickHouse(timeRange);
-    const stats =
+    let stats =
       shouldUseCH && timeRange.start && timeRange.end
         ? await this.clickHouseReader.getGroupedIPs(
             backendId,
@@ -802,6 +849,9 @@ export class StatsService {
             { chain },
           )
         : null;
+    if (stats) {
+      stats = this.populateGeoIPs(backendId, stats);
+    }
     const resolvedStats =
       stats || this.db.getProxyIPs(backendId, chain, limit, timeRange.start, timeRange.end);
     this.recordRoute('proxies.ips', stats ? 'clickhouse' : 'sqlite');
@@ -934,7 +984,7 @@ export class StatsService {
     limit: number,
   ): Promise<IPStats[]> {
     const shouldUseCH = this.shouldUseClickHouse(timeRange);
-    const stats =
+    const chStats =
       shouldUseCH && timeRange.start && timeRange.end
         ? await this.clickHouseReader.getGroupedIPs(
             backendId,
@@ -944,6 +994,7 @@ export class StatsService {
             { rule },
           )
         : null;
+    const stats = chStats ? this.populateGeoIPs(backendId, chStats) : null;
     const resolvedStats =
       stats || this.db.getRuleIPs(backendId, rule, limit, timeRange.start, timeRange.end);
     this.recordRoute('rules.ips', stats ? 'clickhouse' : 'sqlite');
@@ -1008,7 +1059,7 @@ export class StatsService {
       );
       if (ch) {
         this.recordRoute('rules.domains.ip-details', 'clickhouse');
-        return ch;
+        return this.populateGeoIPs(backendId, ch);
       }
     }
     this.recordRoute('rules.domains.ip-details', 'sqlite');
@@ -1300,7 +1351,7 @@ export class StatsService {
   ): Promise<IPStats[]> {
     if (!sourceIP) return [];
     const shouldUseCH = this.shouldUseClickHouse(timeRange);
-    const stats =
+    const chStats =
       shouldUseCH && timeRange.start && timeRange.end
         ? await this.clickHouseReader.getGroupedIPs(
             backendId,
@@ -1310,6 +1361,7 @@ export class StatsService {
             { sourceIP },
           )
         : null;
+    const stats = chStats ? this.populateGeoIPs(backendId, chStats) : null;
     const resolvedStats =
       stats || this.db.getDeviceIPs(backendId, sourceIP, limit, timeRange.start, timeRange.end);
     this.recordRoute('devices.ips', stats ? 'clickhouse' : 'sqlite');

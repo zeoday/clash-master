@@ -277,4 +277,53 @@ describe('StatsService', () => {
       expect(result.totalIPs).toBe(3);
     });
   });
+
+  describe('populateGeoIPs with ClickHouse routing', () => {
+    it('should correctly populate geoIP data when routing results through ClickHouse', async () => {
+      // Seed geoip cache in SQLite
+      db.saveIPGeolocation('142.250.80.46', {
+        country: 'US',
+        country_name: 'United States',
+        city: 'Mountain View',
+        asn: 'AS15169',
+        as_name: 'Google LLC',
+        as_domain: 'google.com',
+        continent: 'NA',
+        continent_name: 'North America',
+      });
+
+      const now = Date.now();
+      const chService = new StatsService(db, realtimeStore) as any;
+      chService.clickHouseReader = {
+        shouldUse: () => true,
+        shouldUseForRange: () => true,
+        getGroupedIPs: async () => ([
+          {
+            ip: '142.250.80.46',
+            domains: ['google.com'],
+            totalUpload: 500,
+            totalDownload: 3000,
+            totalConnections: 1,
+            lastSeen: new Date(now).toISOString(),
+            chains: ['ProxyUS'],
+            // ClickHouse does not return geoIP or asn
+          }
+        ]),
+      };
+
+      const result = await chService.getRuleIPsWithRouting(
+        backendId,
+        'DOMAIN-SUFFIX',
+        { active: true, start: new Date(now - 60000).toISOString(), end: new Date(now + 60000).toISOString() },
+        10
+      );
+
+      expect(result.length).toBe(1);
+      expect(result[0].ip).toBe('142.250.80.46');
+      expect(result[0].geoIP).toBeDefined();
+      expect(result[0].geoIP.countryCode).toBe('US');
+      expect(result[0].geoIP.countryName).toBe('United States');
+      expect(result[0].asn).toBe('AS15169');
+    });
+  });
 });

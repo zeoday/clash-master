@@ -469,6 +469,30 @@ export class IPRepository extends BaseRepository {
     return stmt.get(ip) as GeoIPInfo | undefined;
   }
 
+  getIPGeolocations(ips: string[]): Record<string, GeoIPInfo> {
+    const filteredIps = ips.filter(ip => ip && ip.trim() !== '');
+    if (filteredIps.length === 0) return {};
+    
+    // Chunk into sets of 500 max to avoid SQLite parameter limits
+    const CHUNK_SIZE = 500;
+    const result: Record<string, GeoIPInfo> = {};
+    
+    for (let i = 0; i < filteredIps.length; i += CHUNK_SIZE) {
+      const chunk = filteredIps.slice(i, i + CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      const stmt = this.db.prepare(`
+        SELECT ip, country, country_name, city, asn, as_name, as_domain, continent, continent_name
+        FROM geoip_cache WHERE ip IN (${placeholders})
+      `);
+      const rows = stmt.all(...chunk) as Array<GeoIPInfo & { ip: string }>;
+      for (const row of rows) {
+        result[row.ip] = row;
+      }
+    }
+    
+    return result;
+  }
+
   saveIPGeolocation(ip: string, geo: GeoIPInfo): void {
     const stmt = this.db.prepare(`
       INSERT INTO geoip_cache (ip, country, country_name, city, asn, as_name, as_domain, continent, continent_name, queried_at)

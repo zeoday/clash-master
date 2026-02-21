@@ -642,7 +642,13 @@ export class StatsDatabase {
   updateASNInfo(ip: string, asn: string, org: string) { this.repos.ip.updateASNInfo(ip, asn, org); }
   getASNInfo(ips: string[]) { return this.repos.ip.getASNInfo(ips); }
   getASNInfoForIP(ip: string) { return this.repos.ip.getASNInfoForIP(ip); }
-  getIPGeolocation(ip: string) { return this.repos.ip.getIPGeolocation(ip); }
+  getIPGeolocation(ip: string): any {
+    return this.repos.ip.getIPGeolocation(ip);
+  }
+
+  getIPGeolocations(ips: string[]): Record<string, any> {
+    return this.repos.ip.getIPGeolocations(ips);
+  }
   saveIPGeolocation(ip: string, geo: { country: string; country_name: string; city: string; asn: string; as_name: string; as_domain: string; continent: string; continent_name: string }) { this.repos.ip.saveIPGeolocation(ip, geo); }
 
   // ==================== Timeseries ====================

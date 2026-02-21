@@ -164,9 +164,9 @@ export class BatchBuffer {
               r.geo !== null,
           )
           .map((r) => ({
-            country: r.geo.country,
-            countryName: r.geo.country_name,
-            continent: r.geo.continent,
+            country: r.geo.country || 'Unknown',
+            countryName: r.geo.country_name || r.geo.country || 'Unknown',
+            continent: r.geo.continent || 'Unknown',
             upload: r.upload,
             download: r.download,
             timestampMs: r.timestampMs,

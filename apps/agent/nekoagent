@@ -324,7 +324,12 @@ cmd_stop() {
   fi
   pid="$(cat "$pf")"
   kill "$pid" >/dev/null 2>&1 || true
-  sleep 1
+  # Wait up to 12s for graceful shutdown (agent needs up to 10s for final flush)
+  i=0
+  while [ "$i" -lt 12 ] && kill -0 "$pid" >/dev/null 2>&1; do
+    sleep 1
+    i=$((i + 1))
+  done
   if kill -0 "$pid" >/dev/null 2>&1; then
     kill -9 "$pid" >/dev/null 2>&1 || true
   fi

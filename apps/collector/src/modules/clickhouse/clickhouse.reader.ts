@@ -1200,12 +1200,14 @@ ORDER BY rule, chain
 
     try {
       const response = await fetch(
-        `${baseUrl}/?database=${encodeURIComponent(this.config.database)}&query=${encodeURIComponent(`${query}\nFORMAT JSON`)}`,
+        `${baseUrl}/?database=${encodeURIComponent(this.config.database)}`,
         {
           method: 'POST',
           headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
             ...(authHeader ? { Authorization: authHeader } : {}),
           },
+          body: `${query}\nFORMAT JSON`,
           signal: AbortSignal.timeout(this.config.timeoutMs),
         },
       );

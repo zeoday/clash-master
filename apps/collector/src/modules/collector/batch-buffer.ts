@@ -109,7 +109,7 @@ export class BatchBuffer {
   ): FlushResult {
     const clickHouseWriter = getClickHouseWriter();
     const skipSqliteStatsWrites = shouldSkipSqliteStatsWrites(
-      clickHouseWriter.isEnabled(),
+      clickHouseWriter.isHealthy(),
     );
     const updates = Array.from(this.buffer.values());
     const geoResults = [...this.geoQueue];
@@ -136,7 +136,7 @@ export class BatchBuffer {
 
     if (hasTrafficUpdates) {
       try {
-        const reduceSQLiteWrites = clickHouseWriter.isEnabled() && process.env.CH_DISABLE_SQLITE_REDUCTION !== '1';
+        const reduceSQLiteWrites = clickHouseWriter.isHealthy() && process.env.CH_DISABLE_SQLITE_REDUCTION !== '1';
         if (!skipSqliteStatsWrites) {
           db.batchUpdateTrafficStats(backendId, updates, reduceSQLiteWrites);
         }

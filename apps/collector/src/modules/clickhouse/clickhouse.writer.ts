@@ -46,6 +46,11 @@ export class ClickHouseWriter {
   private writeChain: Promise<void> = Promise.resolve();
   private pendingBatches = 0;
   private pendingRows = 0;
+  private consecutiveFailures = 0;
+  private readonly maxConsecutiveFailures = Math.max(
+    1,
+    Number.parseInt(process.env.CH_UNHEALTHY_THRESHOLD || '5', 10) || 5,
+  );
   private metricsWindowStartedAt = Date.now();
   private metrics = {
     trafficBatches: 0,
@@ -57,6 +62,15 @@ export class ClickHouseWriter {
 
   isEnabled(): boolean {
     return this.writeEnabled;
+  }
+
+  /**
+   * Returns true when the writer is configured AND has not exceeded the
+   * consecutive-failure threshold. Use this (not isEnabled) to decide
+   * whether it is safe to skip SQLite writes.
+   */
+  isHealthy(): boolean {
+    return this.writeEnabled && this.consecutiveFailures < this.maxConsecutiveFailures;
   }
 
   writeTrafficBatch(
@@ -248,6 +262,10 @@ export class ClickHouseWriter {
         throw new Error(`status=${response.status} body=${text.slice(0, 200)}`);
       }
 
+      if (this.consecutiveFailures > 0) {
+        console.info('[ClickHouse Writer] Recovered from failure, marking healthy again.');
+        this.consecutiveFailures = 0;
+      }
       if (metricType === 'traffic') {
         this.metrics.trafficBatches += 1;
         this.metrics.trafficRows += rows.length;
@@ -258,6 +276,12 @@ export class ClickHouseWriter {
       this.maybeLogMetrics();
     } catch (error) {
       this.metrics.failures += 1;
+      this.consecutiveFailures += 1;
+      if (this.consecutiveFailures === this.maxConsecutiveFailures) {
+        console.warn(
+          `[ClickHouse Writer] Marked unhealthy after ${this.maxConsecutiveFailures} consecutive failures. SQLite writes will resume as fallback.`,
+        );
+      }
       this.maybeLogMetrics();
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[ClickHouse Writer] Failed to insert ${metricType} batch rows=${rows.length}: ${message}`);

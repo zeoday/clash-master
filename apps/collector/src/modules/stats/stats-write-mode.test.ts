@@ -23,7 +23,7 @@ describe('stats-write-mode', () => {
     expect(mode.shouldSkipSqliteStatsWrites(false)).toBe(false);
   });
 
-  it('should keep sqlite writes and warn when writer is disabled', async () => {
+  it('should keep sqlite writes and warn when writer is unhealthy', async () => {
     process.env.CH_ONLY_MODE = '1';
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const mode = await import('./stats-write-mode.js');
@@ -32,7 +32,7 @@ describe('stats-write-mode', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('should skip sqlite writes when writer is enabled', async () => {
+  it('should skip sqlite writes when writer is healthy', async () => {
     process.env.CH_ONLY_MODE = '1';
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     const mode = await import('./stats-write-mode.js');

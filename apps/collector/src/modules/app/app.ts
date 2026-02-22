@@ -109,8 +109,11 @@ export async function createApp(options: AppOptions) {
   const app = Fastify({ logger, bodyLimit: 5 * 1024 * 1024 });
 
   // Decompress gzip-encoded request bodies (used by the agent to reduce upload bandwidth)
+  // content-length must be removed because it refers to the compressed size; after decompression
+  // Fastify would compare the larger decompressed bytes against the original header and reject the request.
   app.addHook('preParsing', async (request, _reply, payload) => {
     if (request.headers['content-encoding'] === 'gzip') {
+      delete (request.headers as Record<string, unknown>)['content-length'];
       return payload.pipe(createGunzip());
     }
     return payload;

@@ -98,6 +98,20 @@ normalize_arch() {
 	esac
 }
 
+# Query GitHub releases API for the latest agent tag (e.g. "agent-v0.2.0").
+# Returns empty string on failure.
+get_latest_remote_tag() {
+	repo="${1:-foru17/neko-master}"
+	api_url="https://api.github.com/repos/${repo}/releases/latest"
+	tag=""
+	if command -v curl >/dev/null 2>&1; then
+		tag="$(curl -fsSL "$api_url" 2>/dev/null | awk -F'"' '/"tag_name"/{print $4; exit}')"
+	elif command -v wget >/dev/null 2>&1; then
+		tag="$(wget -qO- "$api_url" 2>/dev/null | awk -F'"' '/"tag_name"/{print $4; exit}')"
+	fi
+	printf '%s\n' "$tag"
+}
+
 compute_sha256() {
 	file="$1"
 	if command -v sha256sum >/dev/null 2>&1; then
@@ -136,10 +150,10 @@ use_local_agent() {
 		set -- "$@" --gateway-token "$NEKO_GATEWAY_TOKEN"
 	fi
 	
-	if [ "${NEKO_AUTO_START:-true}" = "true" ]; then
-		set -- "$@" --auto-start
+	if [ "${NEKO_AUTO_START:-true}" != "true" ]; then
+		set -- "$@" --no-start
 	fi
-	
+
 	# Execute
 	"$@"
 }
@@ -181,6 +195,10 @@ main() {
 	NEKO_PACKAGE_URL="${NEKO_PACKAGE_URL:-}"
 	NEKO_CHECKSUMS_URL="${NEKO_CHECKSUMS_URL:-}"
 	NEKO_CLI_URL="${NEKO_CLI_URL:-}"
+	# NEKO_AGENT_REF: override the git branch/ref used to download the nekoagent manager script.
+	# Useful for testing unreleased branches (e.g. NEKO_AGENT_REF=refactor/clickhouse).
+	# When unset: uses "main" for latest, or the version tag for pinned versions.
+	NEKO_AGENT_REF="${NEKO_AGENT_REF:-}"
 	NEKO_INSTALL_DIR="${NEKO_INSTALL_DIR:-$HOME/.local/bin}"
 	NEKO_BIN_LINK_MODE="${NEKO_BIN_LINK_MODE:-auto}"
 	NEKO_LINK_DIR="${NEKO_LINK_DIR:-/usr/local/bin}"
@@ -194,10 +212,39 @@ main() {
 	# Check if nekoagent is already installed
 	existing_agent="$(detect_existing_install || true)"
 
-	# If already installed, just add the new instance
+	# If already installed, check whether the binary is up-to-date before deciding
 	if [ -n "$existing_agent" ] && [ "${NEKO_FORCE_INSTALL:-false}" != "true" ]; then
-		use_local_agent "$existing_agent"
-		exit 0
+		# Locate the neko-agent binary (same dir as nekoagent, or /usr/local/bin fallback)
+		existing_bin="$(dirname "$existing_agent")/neko-agent"
+		[ -x "$existing_bin" ] || existing_bin="/usr/local/bin/neko-agent"
+
+		local_version=""
+		if [ -x "$existing_bin" ]; then
+			local_version="$("$existing_bin" --version 2>/dev/null | head -1 || true)"
+		fi
+
+		# Determine target plain version (strip "agent-v" prefix)
+		if [ "$NEKO_AGENT_VERSION" = "latest" ]; then
+			remote_tag="$(get_latest_remote_tag "$NEKO_AGENT_REPO")"
+			target_version="${remote_tag#agent-v}"
+		else
+			target_version="${NEKO_AGENT_VERSION#agent-v}"
+			target_version="${target_version#v}"
+		fi
+
+		# If versions match, skip download and just add the instance
+		if [ -n "$local_version" ] && [ -n "$target_version" ] && [ "$local_version" = "$target_version" ]; then
+			echo "[neko-agent] binary already at $local_version, skipping download"
+			use_local_agent "$existing_agent"
+			exit 0
+		fi
+
+		if [ -n "$local_version" ]; then
+			echo "[neko-agent] binary update: $local_version -> ${target_version:-latest}"
+		else
+			echo "[neko-agent] binary not found or version unknown, downloading..."
+		fi
+		# Fall through to full download/install, then re-use existing nekoagent to add instance
 	fi
 
 	# Full installation needed
@@ -228,7 +275,9 @@ main() {
 	if [ -n "$NEKO_CLI_URL" ]; then
 		cli_url="$NEKO_CLI_URL"
 	else
-		if [ "$NEKO_AGENT_VERSION" = "latest" ]; then
+		if [ -n "$NEKO_AGENT_REF" ]; then
+			cli_ref="$NEKO_AGENT_REF"
+		elif [ "$NEKO_AGENT_VERSION" = "latest" ]; then
 			cli_ref="main"
 		else
 			cli_ref="$NEKO_AGENT_VERSION"
@@ -329,8 +378,8 @@ main() {
 	if [ -n "$NEKO_GATEWAY_TOKEN" ]; then
 		set -- "$@" --gateway-token "$NEKO_GATEWAY_TOKEN"
 	fi
-	if [ "$NEKO_AUTO_START" = "true" ]; then
-		set -- "$@" --auto-start
+	if [ "$NEKO_AUTO_START" != "true" ]; then
+		set -- "$@" --no-start
 	fi
 	"$cli_target" "$@"
 

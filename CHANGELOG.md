@@ -7,6 +7,62 @@
 
 ## [未发布]
 
+## [1.3.2] - 2026-02-22
+
+### 新增
+
+- **ClickHouse 高性能存储后端（重大更新）** 🗄️
+  - 新增 ClickHouse 作为可选分析存储引擎，与 SQLite 形成双写架构
+  - 健康状态感知路由：ClickHouse 健康时自动跳过 SQLite 统计写入，显著降低本地磁盘 IO
+  - 支持纯 ClickHouse 模式，适用于大规模多 Agent 部署场景
+  - 新增 `ClickHouseWriter` 模块，支持批量写入、健康检测、连续失败降级与优雅恢复
+- **`NEKO_AGENT_REF` 分支测试支持**
+  - 安装脚本新增 `NEKO_AGENT_REF` 环境变量，支持指定任意 GitHub 分支下载 `nekoagent` 管理脚本
+  - 如 `NEKO_AGENT_REF=refactor/clickhouse` 可测试未合并分支，无需手动修改脚本
+
+### 性能优化
+
+- **Agent 上报流量 Gzip 压缩（~10-15x 压缩比）** 🚀
+  - `neko-agent` HTTP 上报请求全面启用 gzip 压缩，实测夜间流量由 ~4 GB 降至 ~300 MB
+  - Collector 通过 Fastify `preParsing` Hook 透明解压，零额外依赖
+  - 兼容旧版无压缩 `neko-agent` 客户端，新旧版本可并存运行
+
+### 修复
+
+- **[P0] ClickHouse 健康判断方法错误导致静默数据丢失**
+  - 修复 `app.ts` 中 `shouldSkipSqliteStatsWrites` 误用 `clickHouseWriter.isEnabled()` 的问题
+  - 更正为 `clickHouseWriter.isHealthy()`：ClickHouse 连续写入失败时正确回退到 SQLite，防止数据静默丢失
+- **[P1] Agent 重试批次丢失 requestId 导致流量重复计算**
+  - Agent 上报 payload 新增 `requestId`（`crypto/rand` 生成 32 位随机 hex）
+  - Collector 实现服务端幂等去重（5 分钟 TTL Map），同一 `requestId` 多次到达只处理一次
+  - 修复旧 `requeueFront` 逻辑：失败批次重入队列时会生成新 ID，导致重试可被重复计算；现在失败批次在整个重试周期内持有同一 `requestId`
+
+### 变更
+
+- **`nekoagent update` / `upgrade` 彻底重写**
+  - 旧版 `update` 实为重新执行安装脚本并调用 `nekoagent add`，从不更新二进制
+  - 重写为直接下载目标版本 binary、SHA256 校验后原地替换；版本相同时跳过下载
+  - 新增 `upgrade` 作为 `update` 的别名
+- **`nekoagent add` 默认自动启动**
+  - `auto_start` 默认值由 `false` 改为 `true`，`add` 后实例自动启动，无需再手动 `start`
+  - 新增 `--no-start` flag 可在 `add` 时抑制自动启动
+  - 安装脚本 `NEKO_AUTO_START=false` 现可正确透传 `--no-start` 到 `add` 命令
+- **Agent 版本系统统一**
+  - `neko-agent` 二进制版本号改由编译时 ldflags 注入（`-X ...config.AgentVersion=<tag>`），废弃原硬编码常量
+  - CI `agent-release.yml` 自动从 git tag 提取版本注入；本地开发版本显示 `dev`
+  - `nekoagent version` 同时展示管理脚本版本和 `neko-agent` 二进制版本，版本信息一致可查
+- **安装脚本版本检测与增量更新**
+  - 检测到已安装时，自动查询 GitHub Releases API 获取远端最新版本号
+  - 本地版本 == 目标版本时直接调用 `nekoagent add` 跳过下载；否则先更新二进制再添加实例
+
+### 文档
+
+- **`docs/` 目录重组**
+  - 新增 `docs/dev/`（ClickHouse 分析与重构文档）和 `docs/research/`（模型研究报告）子目录
+  - 新增 `docs/README.md`（中文文档索引）和 `docs/README.en.md`（英文文档索引），含分类可点击链接
+  - 修复主 README 中 Agent 文档链接路径错误（指向中文 `.md` 而非英文 `.en.md`）
+  - 架构文档新增独立 Agent 模式章节，描述部署拓扑与完整数据流
+
 ## [1.3.1] - 2026-02-19
 
 ### 新增

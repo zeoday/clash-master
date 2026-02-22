@@ -2,8 +2,11 @@ package agent
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/md5"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +31,7 @@ type trackedFlow struct {
 
 type reportPayload struct {
 	BackendID       int                    `json:"backendId"`
+	RequestID       string                 `json:"requestId,omitempty"`
 	AgentID         string                 `json:"agentId"`
 	AgentVersion    string                 `json:"agentVersion,omitempty"`
 	ProtocolVersion int                    `json:"protocolVersion"`
@@ -64,13 +68,15 @@ type Runner struct {
 	hostname      string
 	lockFile      *os.File
 
-	mu      sync.Mutex
-	queue   []domain.TrafficUpdate
-	flows   map[string]trackedFlow
-	dropped int64
+	mu         sync.Mutex
+	queue      []domain.TrafficUpdate
+	flows      map[string]trackedFlow
+	dropped    int64
+	retryBatch []domain.TrafficUpdate
+	retryID    string
 
-	lastConfigHash  string
-	lastPolicyHash  string
+	lastConfigHash string
+	lastPolicyHash string
 }
 
 func NewRunner(cfg config.Config) *Runner {
@@ -462,13 +468,14 @@ func (r *Runner) ingestSnapshots(snapshots []domain.FlowSnapshot, nowMs int64) {
 }
 
 func (r *Runner) flushOnce(ctx context.Context) error {
-	batch := r.takeBatch(r.cfg.ReportBatchSize)
+	batch, requestID := r.takePendingBatch()
 	if len(batch) == 0 {
 		return nil
 	}
 
 	payload := reportPayload{
 		BackendID:       r.cfg.BackendID,
+		RequestID:       requestID,
 		AgentID:         r.cfg.AgentID,
 		AgentVersion:    config.AgentVersion,
 		ProtocolVersion: config.AgentProtocolVersion,
@@ -476,10 +483,42 @@ func (r *Runner) flushOnce(ctx context.Context) error {
 	}
 
 	if err := r.postJSON(ctx, "/agent/report", payload); err != nil {
-		r.requeueFront(batch)
+		r.setRetryBatch(batch, requestID)
 		return err
 	}
 	return nil
+}
+
+// takePendingBatch returns the retry batch (with its original requestId) if one
+// exists, otherwise dequeues a fresh batch from the queue and generates a new id.
+func (r *Runner) takePendingBatch() ([]domain.TrafficUpdate, string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.retryBatch) > 0 {
+		batch := r.retryBatch
+		id := r.retryID
+		r.retryBatch = nil
+		r.retryID = ""
+		return batch, id
+	}
+	if len(r.queue) == 0 {
+		return nil, ""
+	}
+	limit := r.cfg.ReportBatchSize
+	if limit > len(r.queue) {
+		limit = len(r.queue)
+	}
+	out := make([]domain.TrafficUpdate, limit)
+	copy(out, r.queue[:limit])
+	r.queue = r.queue[limit:]
+	return out, newRequestID()
+}
+
+func (r *Runner) setRetryBatch(batch []domain.TrafficUpdate, id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.retryBatch = batch
+	r.retryID = id
 }
 
 func (r *Runner) sendHeartbeat(ctx context.Context) error {
@@ -502,11 +541,21 @@ func (r *Runner) postJSON(ctx context.Context, path string, payload interface{})
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.cfg.ServerAPIBase+path, bytes.NewReader(body))
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err = gz.Write(body); err != nil {
+		return err
+	}
+	if err = gz.Close(); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.cfg.ServerAPIBase+path, &buf)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
 	req.Header.Set("Authorization", "Bearer "+r.cfg.BackendToken)
 
 	resp, err := r.httpClient.Do(req)
@@ -525,6 +574,12 @@ func (r *Runner) postJSON(ctx context.Context, path string, payload interface{})
 		msg = resp.Status
 	}
 	return fmt.Errorf("server http %d: %s", resp.StatusCode, msg)
+}
+
+func newRequestID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func (r *Runner) takeBatch(limit int) []domain.TrafficUpdate {

@@ -10,7 +10,9 @@ import (
 	"time"
 )
 
-const AgentVersion = "0.1.0"
+// AgentVersion is set at build time via -ldflags "-X ...config.AgentVersion=<tag>"
+// Falls back to "dev" for local/untagged builds.
+var AgentVersion = "dev"
 const AgentProtocolVersion = 1
 
 var (

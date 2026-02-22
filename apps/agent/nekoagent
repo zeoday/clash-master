@@ -7,6 +7,7 @@ INSTALL_DIR="${NEKO_INSTALL_DIR:-$INSTALL_DIR_DEFAULT}"
 AGENT_BIN="${NEKO_AGENT_BIN:-$INSTALL_DIR/neko-agent}"
 CONFIG_DIR="${NEKO_AGENT_CONFIG_DIR:-/etc/neko-agent}"
 STATE_DIR="${NEKO_AGENT_STATE_DIR:-/var/run/neko-agent}"
+AGENT_REPO="${NEKO_AGENT_REPO:-foru17/neko-master}"
 VERSION="0.2.0"
 
 log() {
@@ -49,8 +50,170 @@ is_running() {
   kill -0 "$pid" >/dev/null 2>&1
 }
 
+# ── Download helpers ────────────────────────────────────────────────────────
+
+download_file() {
+  url="$1"
+  output="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$output"
+    return 0
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO "$output" "$url"
+    return 0
+  fi
+  err "curl or wget is required"
+  exit 1
+}
+
+compute_sha256() {
+  file="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+    return 0
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}'
+    return 0
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$file" | awk '{print $2}'
+    return 0
+  fi
+  echo ""
+}
+
+normalize_os() {
+  raw="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  case "$raw" in
+    linux)  echo "linux" ;;
+    darwin) echo "darwin" ;;
+    *)
+      err "unsupported OS: $raw"
+      exit 1
+      ;;
+  esac
+}
+
+normalize_arch() {
+  raw="$(uname -m | tr '[:upper:]' '[:lower:]')"
+  case "$raw" in
+    x86_64|amd64)       echo "amd64" ;;
+    aarch64|arm64)      echo "arm64" ;;
+    armv7l|armv7|armhf) echo "armv7" ;;
+    mips)               echo "mips" ;;
+    mipsle)             echo "mipsle" ;;
+    *)
+      err "unsupported architecture: $raw"
+      exit 1
+      ;;
+  esac
+}
+
+# Query GitHub releases API for the latest agent tag (e.g. "agent-v0.2.0").
+# Returns empty string on failure — callers must handle this gracefully.
+get_latest_remote_tag() {
+  repo="${1:-$AGENT_REPO}"
+  api_url="https://api.github.com/repos/${repo}/releases/latest"
+  tag=""
+  if command -v curl >/dev/null 2>&1; then
+    tag="$(curl -fsSL "$api_url" 2>/dev/null | awk -F'"' '/"tag_name"/{print $4; exit}')"
+  elif command -v wget >/dev/null 2>&1; then
+    tag="$(wget -qO- "$api_url" 2>/dev/null | awk -F'"' '/"tag_name"/{print $4; exit}')"
+  fi
+  printf '%s\n' "$tag"
+}
+
+# Return the version string reported by the local neko-agent binary, or "".
+get_local_binary_version() {
+  if [ -x "$AGENT_BIN" ]; then
+    "$AGENT_BIN" --version 2>/dev/null | head -1 || true
+  fi
+}
+
+# ── Update / download binary ────────────────────────────────────────────────
+
+# Download, verify, and install a new neko-agent binary.
+# Usage: do_download_binary <version_arg> <os> <arch>
+#   version_arg: "latest" or "agent-v0.2.0" style tag
+do_download_binary() {
+  version_arg="$1"
+  os="$2"
+  arch="$3"
+
+  if [ "$version_arg" = "latest" ]; then
+    release_path="releases/latest/download"
+    asset="neko-agent_${os}_${arch}.tar.gz"
+  else
+    # normalise: accept bare "0.2.0" or full "agent-v0.2.0"
+    case "$version_arg" in
+      agent-v*) tag="$version_arg" ;;
+      v*)       tag="agent-${version_arg}" ;;
+      *)        tag="agent-v${version_arg}" ;;
+    esac
+    release_path="releases/download/${tag}"
+    asset="neko-agent_${tag}_${os}_${arch}.tar.gz"
+  fi
+
+  package_url="https://github.com/${AGENT_REPO}/${release_path}/${asset}"
+  checksums_url="https://github.com/${AGENT_REPO}/${release_path}/checksums.txt"
+
+  tmp_dir="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp_dir'" EXIT INT TERM
+
+  archive_path="$tmp_dir/neko-agent.tar.gz"
+  checksums_path="$tmp_dir/checksums.txt"
+
+  log "downloading $package_url"
+  download_file "$package_url" "$archive_path"
+
+  log "verifying checksum..."
+  download_file "$checksums_url" "$checksums_path"
+  expected_hash="$(awk -v a="$asset" '$2 == a {print $1}' "$checksums_path" | head -n 1)"
+  if [ -z "$expected_hash" ]; then
+    err "cannot find checksum for $asset in checksums.txt"
+    exit 1
+  fi
+  actual_hash="$(compute_sha256 "$archive_path")"
+  if [ -z "$actual_hash" ]; then
+    err "no sha256 tooling found (sha256sum / shasum / openssl)"
+    exit 1
+  fi
+  if [ "$expected_hash" != "$actual_hash" ]; then
+    err "checksum mismatch for $asset"
+    err "  expected: $expected_hash"
+    err "  actual:   $actual_hash"
+    exit 1
+  fi
+
+  mkdir -p "$tmp_dir/extract"
+  tar -xzf "$archive_path" -C "$tmp_dir/extract"
+
+  new_binary="$tmp_dir/extract/neko-agent"
+  if [ ! -f "$new_binary" ]; then
+    err "extracted archive does not contain neko-agent"
+    exit 1
+  fi
+
+  chmod +x "$new_binary"
+  install_dir="$(dirname "$AGENT_BIN")"
+  mkdir -p "$install_dir"
+  mv "$new_binary" "$AGENT_BIN"
+  log "binary installed: $AGENT_BIN"
+}
+
+# ── Commands ────────────────────────────────────────────────────────────────
+
 version() {
-  printf '%s\n' "$VERSION"
+  manager_ver="$VERSION"
+  binary_ver="$(get_local_binary_version)"
+  if [ -z "$binary_ver" ]; then
+    binary_ver="(binary not found)"
+  fi
+  printf 'nekoagent  %s\n' "$manager_ver"
+  printf 'neko-agent %s\n' "$binary_ver"
 }
 
 usage() {
@@ -58,22 +221,22 @@ usage() {
 Neko Agent Manager v${VERSION}
 
 Usage:
-  $PROG init <name> [KEY=VALUE ...]    Create/overwrite config file
-  $PROG add <name> [flags/options]     Quick add new backend instance
-  $PROG start <name>                   Start agent instance
-  $PROG stop <name>                    Stop agent instance
-  $PROG restart <name>                 Restart agent instance
-  $PROG status <name>                  Show instance status
-  $PROG logs <name>                    Tail logs
-  $PROG list                           List configured instances
-  $PROG update <name> [version]        Update agent binary and restart
-  $PROG remove <name>                  Remove instance config/runtime
-  $PROG delete <name>                  Alias of remove
-  $PROG uninstall                      Uninstall nekoagent + binaries
-  $PROG version                        Show version
-  $PROG help                           Show this help
+  $PROG init <name> [KEY=VALUE ...]          Create/overwrite config file
+  $PROG add <name> [flags/options]           Quick add new backend instance
+  $PROG start <name>                         Start agent instance
+  $PROG stop <name>                          Stop agent instance
+  $PROG restart <name>                       Restart agent instance
+  $PROG status <name>                        Show instance status
+  $PROG logs <name>                          Tail logs
+  $PROG list                                 List configured instances
+  $PROG update|upgrade <name> [version]      Update binary and restart
+  $PROG remove <name>                        Remove instance config/runtime
+  $PROG delete <name>                        Alias of remove
+  $PROG uninstall                            Uninstall nekoagent + binaries
+  $PROG version                              Show manager and binary version
+  $PROG help                                 Show this help
 
-Quick add with flags:
+Quick add with flags (auto-starts by default):
   $PROG add <name> \
     --server-url <url> \
     --backend-id <id> \
@@ -81,7 +244,11 @@ Quick add with flags:
     --gateway-type <clash|surge> \
     --gateway-url <url> \
     [--gateway-token <token>] \
-    [--auto-start]
+    [--no-start]        # skip auto-start after add
+
+Update examples:
+  $PROG update home-surge              # update to latest release
+  $PROG update home-surge agent-v0.2.0 # update to specific version
 
 Config and runtime paths:
   CONFIG_DIR=$CONFIG_DIR
@@ -99,7 +266,7 @@ Examples:
   # Add and start a new backend
   $PROG add home-surge --server-url http://10.0.0.210:3000 --backend-id 3 \\
     --backend-token ag_xxx --gateway-type surge --gateway-url http://10.0.0.210:9091 \\
-    --gateway-token xxx --auto-start
+    --gateway-token xxx
 
   # List all instances
   $PROG list
@@ -112,6 +279,9 @@ Examples:
 
   # Update to latest version
   $PROG update home-surge
+
+  # Update to specific version
+  $PROG update home-surge agent-v0.2.0
 
   # Remove instance
   $PROG remove home-surge
@@ -223,7 +393,7 @@ cmd_add() {
   gateway_type=""
   gateway_url=""
   gateway_token=""
-  auto_start="false"
+  auto_start="true"   # default: start immediately after add
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -255,6 +425,10 @@ cmd_add() {
         auto_start="true"
         shift
         ;;
+      --no-start)
+        auto_start="false"
+        shift
+        ;;
       *)
         err "unknown flag: $1"
         exit 1
@@ -281,6 +455,7 @@ cmd_add() {
   fi
 
   # Initialize config
+  # shellcheck disable=SC2086
   cmd_init "$name" $config_vars
 
   log "instance '$name' added successfully"
@@ -308,6 +483,7 @@ cmd_start() {
   lf="$(log_file "$name")"
   pf="$(pid_file "$name")"
 
+  # shellcheck disable=SC2086
   nohup "$AGENT_BIN" $args >> "$lf" 2>&1 &
   pid=$!
   printf '%s\n' "$pid" > "$pf"
@@ -383,43 +559,50 @@ cmd_list() {
 
 cmd_update() {
   name="$1"
-  version="${2:-latest}"
-  load_config "$name"
-  was_running=false
-  if is_running "$name"; then
-    was_running=true
-    cmd_stop "$name"
-  fi
+  version_arg="${2:-latest}"
 
-  install_script_url="https://raw.githubusercontent.com/foru17/neko-master/main/apps/agent/install.sh"
-  tmp_script="$(mktemp)"
-  trap 'rm -f "$tmp_script"' EXIT INT TERM
+  os="$(normalize_os)"
+  arch="$(normalize_arch)"
 
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$install_script_url" -o "$tmp_script"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$tmp_script" "$install_script_url"
+  # Determine the plain version string we're targeting (no "agent-v" prefix)
+  if [ "$version_arg" = "latest" ]; then
+    log "querying GitHub for latest release..."
+    remote_tag="$(get_latest_remote_tag "$AGENT_REPO")"
+    if [ -z "$remote_tag" ]; then
+      err "failed to determine latest version from GitHub API"
+      err "hint: check network access or specify a version: $PROG update $name agent-v0.2.0"
+      exit 1
+    fi
+    target_plain="${remote_tag#agent-v}"
   else
-    err "curl or wget is required"
-    exit 1
+    case "$version_arg" in
+      agent-v*) target_plain="${version_arg#agent-v}" ;;
+      v*)       target_plain="${version_arg#v}" ;;
+      *)        target_plain="$version_arg" ;;
+    esac
   fi
 
-  env \
-    NEKO_SERVER="$NEKO_SERVER" \
-    NEKO_BACKEND_ID="$NEKO_BACKEND_ID" \
-    NEKO_BACKEND_TOKEN="$NEKO_BACKEND_TOKEN" \
-    NEKO_GATEWAY_TYPE="$NEKO_GATEWAY_TYPE" \
-    NEKO_GATEWAY_URL="$NEKO_GATEWAY_URL" \
-    NEKO_GATEWAY_TOKEN="${NEKO_GATEWAY_TOKEN:-}" \
-    NEKO_AGENT_VERSION="$version" \
-    NEKO_INSTALL_DIR="$INSTALL_DIR" \
-    NEKO_AUTO_START="false" \
-    sh "$tmp_script"
+  # Check local binary version — skip download if already up-to-date
+  local_version="$(get_local_binary_version)"
+  if [ -n "$local_version" ] && [ "$local_version" = "$target_plain" ]; then
+    log "binary already at $local_version, no download needed"
+  else
+    log "updating binary: ${local_version:-not installed} -> $target_plain"
 
-  if [ "$was_running" = true ]; then
-    cmd_start "$name"
+    was_running=false
+    if is_running "$name"; then
+      was_running=true
+      cmd_stop "$name"
+    fi
+
+    do_download_binary "$version_arg" "$os" "$arch"
+
+    if [ "$was_running" = true ]; then
+      cmd_start "$name"
+    fi
   fi
-  log "instance '$name' updated to $version"
+
+  log "instance '$name' is at version $target_plain"
 }
 
 cmd_remove() {
@@ -478,14 +661,14 @@ main() {
         exit 1
       fi
       case "$cmd" in
-        start) cmd_start "$1" ;;
-        stop) cmd_stop "$1" ;;
+        start)   cmd_start "$1" ;;
+        stop)    cmd_stop "$1" ;;
         restart) cmd_stop "$1" || true; cmd_start "$1" ;;
-        status) cmd_status "$1" ;;
-        logs) cmd_logs "$1" ;;
+        status)  cmd_status "$1" ;;
+        logs)    cmd_logs "$1" ;;
       esac
       ;;
-    update)
+    update|upgrade)
       if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
         usage
         exit 1

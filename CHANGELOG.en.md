@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-02-22
+
+### Added
+
+- **ClickHouse high-performance storage backend (major update)** 🗄️
+  - Added ClickHouse as an optional analytics storage engine, forming a dual-write architecture alongside SQLite
+  - Health-aware write routing: SQLite stats writes are automatically skipped when ClickHouse is healthy, significantly reducing local disk I/O
+  - ClickHouse-exclusive mode available for large-scale multi-agent deployments
+  - New `ClickHouseWriter` module with batched writes, health monitoring, consecutive-failure fallback, and graceful recovery
+- **`NEKO_AGENT_REF` branch testing support**
+  - Added `NEKO_AGENT_REF` environment variable to the install script to download `nekoagent` from any GitHub branch
+  - E.g. `NEKO_AGENT_REF=refactor/clickhouse` lets you test pre-release branches without modifying the script
+
+### Performance
+
+- **Agent report traffic gzip compression (~10-15x ratio)** 🚀
+  - All `neko-agent` HTTP report requests are now gzip-compressed; overnight upload traffic reduced from ~4 GB to ~300 MB
+  - Collector transparently decompresses via Fastify `preParsing` hook with no new dependencies
+  - Fully backward-compatible: older uncompressed `neko-agent` versions continue to work alongside compressed ones
+
+### Fixed
+
+- **[P0] ClickHouse health check used wrong method, causing silent data loss**
+  - Fixed `shouldSkipSqliteStatsWrites` in `app.ts` incorrectly calling `clickHouseWriter.isEnabled()` instead of `clickHouseWriter.isHealthy()`
+  - When ClickHouse has consecutive write failures it now correctly falls back to SQLite writes, preventing silent data loss
+- **[P1] Agent retry lost requestId, causing duplicate traffic counting**
+  - Agent report payload now includes a `requestId` (32-char hex generated via `crypto/rand`)
+  - Collector implements server-side idempotency dedup (5-minute TTL Map); duplicate `requestId` arrivals are silently discarded
+  - Fixed the old `requeueFront` pattern where re-queuing a failed batch assigned it a new ID, allowing the same data to be counted twice; failed batches now carry the same `requestId` for the entire retry window
+
+### Changed
+
+- **`nekoagent update` / `upgrade` completely rewritten**
+  - The old `update` command was re-running the install script and invoking `nekoagent add` — it never actually updated the binary
+  - Rewritten to download the target version directly, SHA256-verify it, and replace the installed binary in-place; skips download when already at target version
+  - Added `upgrade` as an alias for `update`
+- **`nekoagent add` auto-starts by default**
+  - `auto_start` default changed from `false` to `true`; instances now start automatically after `add` without requiring a manual `start`
+  - Added `--no-start` flag to suppress auto-start when needed
+  - Install script `NEKO_AUTO_START=false` now correctly passes `--no-start` through to the `add` command
+- **Unified agent versioning**
+  - `neko-agent` binary version is now injected at build time via ldflags (`-X ...config.AgentVersion=<tag>`), replacing the previous hardcoded constant
+  - CI `agent-release.yml` automatically extracts and injects the version from the git tag; local dev builds report `dev`
+  - `nekoagent version` now displays both the manager script version and the `neko-agent` binary version together for consistent version visibility
+- **Install script incremental version detection**
+  - When an existing installation is detected, the script queries the GitHub Releases API to determine the latest remote version
+  - If local version matches the target: skip download and call `nekoagent add` directly; otherwise update the binary first, then add the instance
+
+### Documentation
+
+- **`docs/` directory reorganization**
+  - Added `docs/dev/` (ClickHouse analysis and refactor docs) and `docs/research/` (model research reports) subdirectories
+  - Added `docs/README.md` (Chinese doc index) and `docs/README.en.md` (English doc index) with categorized clickable links
+  - Fixed broken Agent doc links in `README.en.md` that pointed to Chinese `.md` files instead of `.en.md`
+  - Architecture guide updated with a dedicated Agent mode section covering deployment topology and data flow
+
 ## [1.3.1] - 2026-02-19
 
 ### Added

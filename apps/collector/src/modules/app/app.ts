@@ -5,6 +5,7 @@
  */
 
 import crypto from 'crypto';
+import { createGunzip } from 'node:zlib';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
@@ -86,6 +87,7 @@ type AgentReportPayload = {
   agentId?: string;
   protocolVersion?: number;
   agentVersion?: string;
+  requestId?: string;
   updates?: AgentTrafficUpdatePayload[];
 };
 
@@ -105,6 +107,34 @@ export async function createApp(options: AppOptions) {
   // Create Fastify instance
   // Increase body limit to 5MB for agent config sync (large Clash/Surge configs)
   const app = Fastify({ logger, bodyLimit: 5 * 1024 * 1024 });
+
+  // Decompress gzip-encoded request bodies (used by the agent to reduce upload bandwidth)
+  app.addHook('preParsing', async (request, _reply, payload) => {
+    if (request.headers['content-encoding'] === 'gzip') {
+      return payload.pipe(createGunzip());
+    }
+    return payload;
+  });
+
+  // In-memory dedup for agent report requestIds — prevents double-counting on POST retry.
+  // Keyed by requestId, value is the time it was first seen (ms). TTL: 5 minutes.
+  const seenRequestIds = new Map<string, number>();
+  const REQUEST_ID_TTL_MS = 5 * 60 * 1000;
+  function isDuplicateRequestId(id: string): boolean {
+    const now = Date.now();
+    if (seenRequestIds.has(id)) {
+      return true;
+    }
+    seenRequestIds.set(id, now);
+    // Prune expired entries periodically (every ~500 inserts is fine; map is small)
+    if (seenRequestIds.size % 500 === 0) {
+      const cutoff = now - REQUEST_ID_TTL_MS;
+      for (const [k, ts] of seenRequestIds) {
+        if (ts < cutoff) seenRequestIds.delete(k);
+      }
+    }
+    return false;
+  }
 
   // Register CORS
   await app.register(cors, {
@@ -466,6 +496,12 @@ export async function createApp(options: AppOptions) {
       return;
     }
 
+    // Idempotency: if this requestId has already been processed, skip to avoid double-counting
+    const requestId = typeof body?.requestId === 'string' ? body.requestId.slice(0, 64) : '';
+    if (requestId && isDuplicateRequestId(requestId)) {
+      return { success: true, backendId, accepted: 0, dropped: 0, duplicate: true };
+    }
+
     const rawUpdates = Array.isArray(body?.updates) ? body.updates : [];
     if (rawUpdates.length === 0) {
       return { success: true, backendId, accepted: 0, dropped: 0 };
@@ -488,7 +524,8 @@ export async function createApp(options: AppOptions) {
     }
 
     const clickHouseWriter = getClickHouseWriter();
-    const skipSqliteStatsWrites = shouldSkipSqliteStatsWrites(clickHouseWriter.isEnabled());
+    // Use isHealthy() (not isEnabled()) so SQLite fallback activates when ClickHouse is failing
+    const skipSqliteStatsWrites = shouldSkipSqliteStatsWrites(clickHouseWriter.isHealthy());
     if (!skipSqliteStatsWrites) {
       db.batchUpdateTrafficStats(backendId, updates);
     }

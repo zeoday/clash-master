@@ -532,8 +532,9 @@ export async function createApp(options: AppOptions) {
     if (!skipSqliteStatsWrites) {
       db.batchUpdateTrafficStats(backendId, updates);
     }
+    let pendingCHTrafficWrite: Promise<unknown> | undefined;
     if (clickHouseWriter.isEnabled()) {
-      clickHouseWriter.writeTrafficBatch(backendId, updates);
+      pendingCHTrafficWrite = clickHouseWriter.writeTrafficBatch(backendId, updates);
     }
 
     const geoBatchByIp = new Map<
@@ -582,6 +583,17 @@ export async function createApp(options: AppOptions) {
       );
     }
 
+    // Mirror flushBatch behavior in direct mode: clear realtime store after persisting to DB.
+    // Without this, stats queries would double-count (DB total + realtime total = 2x actual).
+    if (!skipSqliteStatsWrites) {
+      realtimeStore.clearTraffic(backendId);
+    }
+    if (pendingCHTrafficWrite) {
+      pendingCHTrafficWrite
+        .then(() => { realtimeStore.clearTraffic(backendId); })
+        .catch(() => {});
+    }
+
     if (geoBatchByIp.size > 0 && geoService) {
       // Process in background without blocking the agent response
       Promise.all(
@@ -619,11 +631,14 @@ export async function createApp(options: AppOptions) {
           if (countryUpdates.length > 0) {
             if (!skipSqliteStatsWrites) {
               db.batchUpdateCountryStats(backendId, countryUpdates);
+              realtimeStore.clearCountries(backendId);
             }
             if (clickHouseWriter.isEnabled()) {
-              clickHouseWriter.writeCountryBatch(backendId, countryUpdates).catch((err) => {
-                console.error(`[Agent:${backendId}] ClickHouse country batch write failed:`, err);
-              });
+              clickHouseWriter.writeCountryBatch(backendId, countryUpdates)
+                .then(() => { realtimeStore.clearCountries(backendId); })
+                .catch((err) => {
+                  console.error(`[Agent:${backendId}] ClickHouse country batch write failed:`, err);
+                });
             }
           }
         })

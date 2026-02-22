@@ -1,10 +1,10 @@
-# Agent 安装指南
+# Agent Install Guide
 
-**中文 | [English](./install.en.md)**
+[中文](./install.md) | **English**
 
-## 支持的目标平台
+## Supported targets
 
-发布产物覆盖：
+Release artifacts are published for:
 
 - `darwin-amd64`
 - `darwin-arm64`
@@ -14,7 +14,7 @@
 - `linux-mips`
 - `linux-mipsle`
 
-## 通过脚本安装（推荐）
+## Install via script (recommended)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/foru17/neko-master/main/apps/agent/install.sh \
@@ -26,21 +26,21 @@ curl -fsSL https://raw.githubusercontent.com/foru17/neko-master/main/apps/agent/
         sh
 ```
 
-可选环境变量：
+Optional env:
 
-- `NEKO_GATEWAY_TOKEN`：网关认证 token
-- `NEKO_AGENT_VERSION`：`latest`（默认）或具体标签如 `agent-v0.2.0`
-- `NEKO_INSTALL_DIR`：安装目录（默认 `$HOME/.local/bin`）
-- `NEKO_AUTO_START`：`true|false`（默认 `true`）
-- `NEKO_LOG`：`true|false`（默认 `true`）
-- `NEKO_LOG_FILE`：运行时日志文件路径
-- `NEKO_PACKAGE_URL`：自定义软件包 URL
-- `NEKO_CHECKSUMS_URL`：自定义校验和 URL
-- `NEKO_INSTANCE_NAME`：`nekoagent` 管理器中的实例名（默认 `backend-<id>`）
-- `NEKO_BIN_LINK_MODE`：全局 bin 目录软链模式（`auto|true|false`，默认 `auto`）
-- `NEKO_LINK_DIR`：软链目标目录（默认 `/usr/local/bin`）
+- `NEKO_GATEWAY_TOKEN`: gateway auth token
+- `NEKO_AGENT_VERSION`: `latest` (default) or explicit tag like `agent-v0.2.0`
+- `NEKO_INSTALL_DIR`: install directory (default `$HOME/.local/bin`)
+- `NEKO_AUTO_START`: `true|false` (default `true`)
+- `NEKO_LOG`: `true|false` (default `true`)
+- `NEKO_LOG_FILE`: runtime log file path
+- `NEKO_PACKAGE_URL`: custom package URL override
+- `NEKO_CHECKSUMS_URL`: custom checksums URL override
+- `NEKO_INSTANCE_NAME`: instance name for `nekoagent` manager (default `backend-<id>`)
+- `NEKO_BIN_LINK_MODE`: `auto|true|false` for symlink into global bin dir (default `auto`)
+- `NEKO_LINK_DIR`: global bin dir for symlink (default `/usr/local/bin`)
 
-安装完成后，使用以下命令管理 Agent：
+After install, manage agent with:
 
 ```bash
 nekoagent status <instance>
@@ -50,39 +50,58 @@ nekoagent update <instance> agent-vX.Y.Z
 nekoagent remove <instance>
 ```
 
-卸载二进制：
+Uninstall binaries:
 
 ```bash
 nekoagent uninstall
 ```
 
-## 手动安装
+## Manual install
 
-1. 从 GitHub Releases 下载对应平台的压缩包
-2. 使用 `checksums.txt` 验证哈希
-3. 解压 `neko-agent`
-4. 携带后端参数直接运行可执行文件
+1. Download the correct tarball from GitHub Releases
+2. Verify hash using `checksums.txt`
+3. Extract `neko-agent`
+4. Run executable with backend parameters
 
-## 安装了哪些文件
+## OpenWrt note
 
-安装脚本在 `NEKO_INSTALL_DIR`（默认 `~/.local/bin`）中放置两个二进制文件：
+Before build selection, check architecture:
 
-- `neko-agent` — 数据采集守护进程（持续运行，向面板上报数据）
-- `nekoagent` — CLI 管理器（Shell 脚本，管理实例生命周期：start / stop / update / remove）
+```sh
+uname -m
+opkg print-architecture
+```
 
-`nekoagent` 管理器的存储位置：
+Common mapping:
 
-- 实例配置：`CONFIG_DIR`（默认 `/etc/neko-agent/<name>.env`）
-- PID 与日志文件：`STATE_DIR`（默认 `/var/run/neko-agent/`）
+- `x86_64` -> `linux-amd64`
+- `aarch64` -> `linux-arm64`
+- `armv7*` -> `linux-armv7`
+- `mips` -> `linux-mips`
+- `mipsle` -> `linux-mipsle`
 
-## 开机自启配置
+## What gets installed
 
-`neko-agent` 默认以后台进程方式运行，由 `nekoagent` 管理，不自动注册系统服务。
-生产环境建议配置系统服务，确保重启后自动恢复运行。
+The install script places two binaries into `NEKO_INSTALL_DIR` (default `~/.local/bin`):
+
+- `neko-agent` — the data collection daemon (runs continuously, reports to panel)
+- `nekoagent` — the CLI manager for lifecycle operations (start / stop / update / remove)
+
+The `nekoagent` manager stores:
+
+- Instance configs in `CONFIG_DIR` (default `/etc/neko-agent/<name>.env`)
+- PID and log files in `STATE_DIR` (default `/var/run/neko-agent/`)
+
+## Autostart on system boot
+
+By default `neko-agent` runs as a background process managed by `nekoagent`. It does not
+register a system service automatically. For production deployments, set up a system service
+so the agent survives reboots.
 
 ### Linux — systemd
 
-创建 `/etc/systemd/system/neko-agent-<instance>.service`（将 `<instance>` 替换为实例名，如 `backend-1`）：
+Create `/etc/systemd/system/neko-agent-<instance>.service` (replace `<instance>` with your
+instance name, e.g. `backend-1`):
 
 ```ini
 [Unit]
@@ -109,7 +128,7 @@ StandardError=journal
 WantedBy=multi-user.target
 ```
 
-若设置了 `NEKO_GATEWAY_TOKEN`，在 `ExecStart` 末尾追加：
+If `NEKO_GATEWAY_TOKEN` is set, append it to `ExecStart`:
 
 ```ini
 ExecStart=/usr/local/bin/neko-agent \
@@ -117,7 +136,7 @@ ExecStart=/usr/local/bin/neko-agent \
   --gateway-token ${NEKO_GATEWAY_TOKEN}
 ```
 
-启用并启动：
+Enable and start:
 
 ```bash
 systemctl daemon-reload
@@ -126,17 +145,18 @@ systemctl start neko-agent-<instance>
 systemctl status neko-agent-<instance>
 ```
 
-查看日志：
+View logs:
 
 ```bash
 journalctl -u neko-agent-<instance> -f
 ```
 
-> 注意：若 `neko-agent` 安装在 `~/.local/bin`（非 root），需相应调整 `ExecStart` 路径，并考虑以非 root 用户运行服务。
+> Note: If `neko-agent` is installed to `~/.local/bin` (non-root), adjust `ExecStart` path
+> accordingly and consider running the service under a non-root user.
 
 ### macOS — launchd
 
-创建 `~/Library/LaunchAgents/io.neko-master.agent.<instance>.plist`：
+Create `~/Library/LaunchAgents/io.neko-master.agent.<instance>.plist`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -174,13 +194,13 @@ journalctl -u neko-agent-<instance> -f
 </plist>
 ```
 
-加载服务：
+Load the service:
 
 ```bash
 launchctl load ~/Library/LaunchAgents/io.neko-master.agent.<instance>.plist
 ```
 
-卸载服务：
+Unload:
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/io.neko-master.agent.<instance>.plist
@@ -188,7 +208,7 @@ launchctl unload ~/Library/LaunchAgents/io.neko-master.agent.<instance>.plist
 
 ### OpenWrt — init.d
 
-创建 `/etc/init.d/neko-agent`：
+Create `/etc/init.d/neko-agent`:
 
 ```sh
 #!/bin/sh /etc/rc.common
@@ -197,11 +217,11 @@ START=95
 STOP=10
 
 PROG=/usr/local/bin/neko-agent
-INSTANCE=backend-1   # 按需修改
+INSTANCE=backend-1   # change as needed
 CONF=/etc/neko-agent/${INSTANCE}.env
 
 start_service() {
-    # 加载配置
+    # load config
     [ -f "$CONF" ] && . "$CONF"
     procd_open_instance
     procd_set_param command "$PROG" \
@@ -219,27 +239,10 @@ start_service() {
 }
 ```
 
-启用：
+Enable:
 
 ```bash
 chmod +x /etc/init.d/neko-agent
 /etc/init.d/neko-agent enable
 /etc/init.d/neko-agent start
 ```
-
-## OpenWrt 注意事项
-
-安装前确认架构：
-
-```sh
-uname -m
-opkg print-architecture
-```
-
-常见对应关系：
-
-- `x86_64` → `linux-amd64`
-- `aarch64` → `linux-arm64`
-- `armv7*` → `linux-armv7`
-- `mips` → `linux-mips`
-- `mipsle` → `linux-mipsle`

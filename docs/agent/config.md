@@ -1,28 +1,30 @@
-# Agent Configuration
+# Agent 参数配置
 
-## Required flags
+**中文 | [English](./config.en.md)**
 
-- `--server-url`: panel server URL (without `/api` suffix is fine)
-- `--backend-id`: backend numeric id
-- `--backend-token`: backend auth token
-- `--gateway-type`: `clash` or `surge`
-- `--gateway-url`: gateway API URL
+## 必填参数
 
-## Optional flags
+- `--server-url`：面板服务器 URL（无需添加 `/api` 后缀）
+- `--backend-id`：后端数字 ID
+- `--backend-token`：后端认证 token
+- `--gateway-type`：`clash` 或 `surge`
+- `--gateway-url`：网关 API URL
 
-- `--gateway-token`: gateway auth token (`Authorization` for Clash, `x-key` for Surge)
-- `--agent-id`: custom agent ID (default `hostname-pid`)
-- `--report-interval`: report loop interval (default `2s`)
-- `--heartbeat-interval`: heartbeat interval (default `30s`)
-- `--gateway-poll-interval`: gateway pull interval (default `2s`)
-- `--request-timeout`: HTTP timeout (default `15s`)
-- `--report-batch-size`: max updates per report (default `1000`)
-- `--max-pending-updates`: memory queue cap (default `50000`)
-- `--stale-flow-timeout`: stale flow eviction timeout (default `5m`)
-- `--log`: enable logs, set `--log=false` to quiet mode
-- `--version`: print version
+## 可选参数
 
-## Example: Clash
+- `--gateway-token`：网关认证 token（Clash 使用 `Authorization`，Surge 使用 `x-key`）
+- `--agent-id`：自定义 Agent ID（默认：从 backend token 的 SHA256 自动生成，重启稳定）
+- `--report-interval`：上报循环间隔（默认 `2s`）
+- `--heartbeat-interval`：心跳间隔（默认 `30s`）
+- `--gateway-poll-interval`：网关拉取间隔（默认 `2s`）
+- `--request-timeout`：HTTP 超时（默认 `15s`）
+- `--report-batch-size`：每次上报最大条目数（默认 `1000`）
+- `--max-pending-updates`：内存队列上限（默认 `50000`）
+- `--stale-flow-timeout`：过期流量清除超时（默认 `5m`）
+- `--log`：启用日志，`--log=false` 为静默模式
+- `--version`：打印版本号
+
+## 示例：Clash
 
 ```bash
 ./neko-agent \
@@ -34,7 +36,7 @@
   --gateway-token 'clash-secret'
 ```
 
-## Example: Surge
+## 示例：Surge
 
 ```bash
 ./neko-agent \
@@ -46,8 +48,8 @@
   --gateway-token 'surge-key'
 ```
 
-## Best-practice defaults for remote LAN
+## 远程 LAN 推荐默认值
 
 - `--gateway-poll-interval=2s`
 - `--report-interval=2s`
-- `--heartbeat-interval=10s` (faster offline detection)
+- `--heartbeat-interval=10s`（加快离线检测）

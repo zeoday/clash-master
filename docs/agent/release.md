@@ -1,57 +1,59 @@
-# Agent Release and Packaging
+# Agent 发布与打包
 
-## Tagging strategy
+**中文 | [English](./release.en.md)**
 
-- Agent release workflow triggers on tags: `agent-v*`
-- Example: `agent-v0.2.0`
+## 标签策略
 
-## Generated assets
+- Agent 发布工作流由 `agent-v*` 格式的标签触发
+- 示例：`agent-v0.2.0`
 
-For each target OS/arch, workflow publishes two tarballs:
+## 生成的产物
 
-- Versioned: `neko-agent_<tag>_<os>_<arch>.tar.gz`
-- Latest alias: `neko-agent_<os>_<arch>.tar.gz`
+每个目标 OS/架构均发布两个压缩包：
 
-Also publishes:
+- 带版本号：`neko-agent_<tag>_<os>_<arch>.tar.gz`
+- latest 别名：`neko-agent_<os>_<arch>.tar.gz`
 
-- `checksums.txt` (SHA256 for all tarballs)
+同时发布：
 
-## CI workflows
+- `checksums.txt`（所有压缩包的 SHA256）
+
+## CI 工作流
 
 - `.github/workflows/agent-build.yml`
-  - Runs on PR/push
-  - Executes `go test ./...`
-  - Cross-build matrix validation
+  - 在 PR/push 时触发
+  - 执行 `go test ./...`
+  - 交叉编译矩阵验证
 
 - `.github/workflows/agent-release.yml`
-  - Runs on `agent-v*` tag push
-  - Cross-builds, archives, generates checksums
-  - Publishes release assets to GitHub Releases
+  - 在推送 `agent-v*` 标签时触发
+  - 交叉编译、打包、生成校验和
+  - 将发布产物发布到 GitHub Releases
 
-## Compatibility gate (recommended)
+## 兼容性门控（推荐）
 
-Collector validates incoming agent compatibility on heartbeat/report:
+Collector 在心跳/上报时验证 Agent 兼容性：
 
-- `MIN_AGENT_PROTOCOL_VERSION` (default `1`)
-- `MIN_AGENT_VERSION` (optional, e.g. `1.3.8`)
+- `MIN_AGENT_PROTOCOL_VERSION`（默认 `1`）
+- `MIN_AGENT_VERSION`（可选，如 `1.3.8`）
 
-When incompatible, API returns `426` with machine-readable code:
+不兼容时，API 返回 `426` 并附带机器可读代码：
 
 - `AGENT_PROTOCOL_TOO_OLD`
 - `AGENT_VERSION_REQUIRED`
 - `AGENT_VERSION_TOO_OLD`
 
-## Compatibility matrix template
+## 兼容性矩阵模板
 
-| Agent Version | Min Server Version | Protocol |
+| Agent 版本 | 最低服务端版本 | 协议版本 |
 | --- | --- | --- |
 | `agent-v1.3.1` | `v1.3.1` | `1` |
 | `agent-v1.3.8` | `v1.3.1` | `1` |
 
-Numbers may skip when no agent release is needed.
+版本号不连续时，表示该版本无需独立 Agent 发布。
 
-## Naming conventions
+## 命名规范
 
-- Binary inside tarball is always `neko-agent`
-- Tarball name carries platform identity for user download and script detection
-- Linux variants explicitly distinguish `amd64/arm64/armv7/mips/mipsle`
+- 压缩包内二进制文件始终命名为 `neko-agent`
+- 压缩包名称包含平台信息，便于用户下载和脚本识别
+- Linux 变体明确区分 `amd64/arm64/armv7/mips/mipsle`

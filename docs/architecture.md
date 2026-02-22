@@ -234,6 +234,97 @@
 
 ---
 
+## Agent 模式架构
+
+Agent 模式允许一个中心化的 Neko Master 面板接收来自远程 LAN 网关的数据，无需 collector 直连网关。
+
+### 组件说明
+
+| 组件 | 说明 |
+|---|---|
+| `neko-agent` | 数据采集守护进程，运行于网关旁边，周期性拉取并上报到面板 |
+| `nekoagent` | CLI 管理器（Shell 脚本），管理 `neko-agent` 实例的生命周期 |
+
+### 架构图
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    中心面板 (Neko Master)                        │
+│                                                                   │
+│  Fastify API Server                                               │
+│  ├─ POST /api/agent/report       ← 接收批量流量增量               │
+│  ├─ POST /api/agent/heartbeat    ← 接收心跳（在线状态更新）        │
+│  ├─ POST /api/agent/config-sync  ← 接收规则/代理/Provider 配置    │
+│  └─ POST /api/agent/policy-state ← 接收当前策略状态               │
+│                                                                   │
+│  Backend 类型：agent://，系统生成 token，绑定 agentId             │
+└─────────────────────────────────────────────────────────────────┘
+                              ↑
+                     HTTP (token 鉴权)
+                              │
+┌─────────────────────────────────────────────────────────────────┐
+│                   网关旁边的主机 (Remote Host)                    │
+│                                                                   │
+│  nekoagent（CLI 管理器）                                          │
+│  ├─ /etc/neko-agent/<instance>.env  (配置文件)                    │
+│  └─ /var/run/neko-agent/<instance>.pid (PID 文件)                 │
+│                                                                   │
+│  neko-agent（守护进程）                                           │
+│  │                                                                │
+│  ├── 1. 拉取网关数据                                              │
+│  │      ├─ Clash/Mihomo: WebSocket /connections (实时推送)        │
+│  │      └─ Surge: HTTP GET /v1/requests/recent (2s 轮询)          │
+│  │                                                                │
+│  ├── 2. 增量计算 (Delta)                                          │
+│  │      - 识别新连接 / 更新连接                                   │
+│  │      - 计算 upload/download 增量                               │
+│  │      - 聚合 domain + proxy + rule                              │
+│  │                                                                │
+│  ├── 3. 批量上报 (每 2s)                                          │
+│  │      POST /api/agent/report                                    │
+│  │      - 最多 1000 条/批，积压上限 50000 条                      │
+│  │                                                                │
+│  ├── 4. 心跳 (每 30s)                                             │
+│  │      POST /api/agent/heartbeat                                 │
+│  │                                                                │
+│  ├── 5. 配置同步 (每 2min，MD5 去重)                              │
+│  │      POST /api/agent/config-sync                               │
+│  │      - rules / proxies / providers                             │
+│  │                                                                │
+│  └── 6. 策略状态同步 (每 30s，状态变化才上报)                     │
+│         POST /api/agent/policy-state                              │
+│                                                                   │
+│  PID 锁：同一 backendId 同时只允许一个进程运行                    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                    本地网络 (LAN)
+                              │
+            ┌─────────────────────────────┐
+            │  Clash/Mihomo or Surge      │
+            │  Gateway API                │
+            └─────────────────────────────┘
+```
+
+### 直连模式 vs Agent 模式
+
+| 维度 | 直连（Direct） | Agent |
+|---|---|---|
+| collector 是否需连接网关 | ✅ 是 | ❌ 否 |
+| 数据实时性 | 毫秒级 (WS) | 约 2s 上报周期 |
+| 网络隔离 | 需要 collector → 网关可达 | agent 发起连接，无需入站 |
+| 多站点场景 | 复杂（需 VPN/内网穿透） | 原生支持，每站点独立 agent |
+| 安全边界 | 需要共享网关 API token | 面板 token 与网关 token 隔离 |
+
+### 安全模型
+
+- 面板为每个 Agent backend 生成唯一 token
+- `agentId` 由 backend token 派生：`"agent-" + sha256(token)[:16]`，重启后保持稳定，无需手动指定
+- Token 与 `agentId` 绑定，同一 token 不能以不同 `agentId` 注册（跨实例复用被服务端拒绝）
+- Token 轮换后旧进程的请求立即被拒绝（需重新配置新 token 再启动）
+- 配置同步与策略同步均有 MD5 去重，减少无效 POST
+
+---
+
 ## 数据流详解
 
 ### 1. Clash 数据采集流程
@@ -654,7 +745,22 @@ neko-master/
 │   └── shared/                       # 共享类型定义
 │
 ├── docs/
-│   └── architecture.md               # 本文档
+│   ├── architecture.md               # 本文档（中文）
+│   ├── architecture.en.md            # 架构文档（英文）
+│   └── agent/                        # Agent 模式文档
+│       ├── overview.md               # 架构说明与模式对比
+│       ├── quick-start.md            # 快速开始
+│       ├── install.md                # 安装指南（含 systemd/launchd）
+│       ├── config.md                 # 参数配置参考
+│       ├── release.md                # 发布与兼容策略
+│       └── troubleshooting.md        # 常见问题
+│
+├── apps/
+│   └── agent/                        # Agent 守护进程（Go）
+│       ├── internal/agent/           # 核心逻辑
+│       │   └── runner.go             # 采集循环、上报、心跳、配置同步
+│       ├── install.sh                # Agent 一键安装脚本
+│       └── nekoagent                 # CLI 管理器（Shell 脚本）
 │
 └── docker-compose.yml
 ```

@@ -234,14 +234,56 @@ pnpm dev
 
 ## 🤖 Agent 部署
 
-当你希望中心化部署一个 Neko Master 服务，并在不同设备（OpenWrt、Linux、macOS）本地采集网关数据时，推荐使用 Agent 模式。
+当你希望中心化部署一个 Neko Master 服务，并在不同设备（OpenWrt、Linux、macOS）本地采集网关数据时，推荐使用 Agent 模式。Agent 运行在网关旁边，主动拉取数据并上报至面板，面板无需主动连接网关。
 
-- 总览: `docs/agent/overview.md`
-- 快速开始: `docs/agent/quick-start.md`
-- 安装指南: `docs/agent/install.md`
-- 参数配置: `docs/agent/config.md`
-- 发布流程: `docs/agent/release.md`
-- 常见问题: `docs/agent/troubleshooting.md`
+支持网关类型：**Clash / Mihomo**（WebSocket 实时）和 **Surge v5+**（HTTP 轮询）。
+
+### 快速安装（UI 生成命令）
+
+1. 在面板「设置 → 后端」中添加一个 `Agent` 类型后端，选择网关类型（Clash 或 Surge）
+2. 点击「查看安装脚本」，复制一键安装命令，在目标主机上执行：
+
+```bash
+# Clash / Mihomo 网关示例
+curl -fsSL https://raw.githubusercontent.com/foru17/neko-master/main/apps/agent/install.sh \
+  | env NEKO_SERVER='http://your-panel:3000' \
+        NEKO_BACKEND_ID='1' \
+        NEKO_BACKEND_TOKEN='ag_xxx' \
+        NEKO_GATEWAY_TYPE='clash' \
+        NEKO_GATEWAY_URL='http://127.0.0.1:9090' \
+        sh
+
+# Surge 网关示例
+curl -fsSL https://raw.githubusercontent.com/foru17/neko-master/main/apps/agent/install.sh \
+  | env NEKO_SERVER='http://your-panel:3000' \
+        NEKO_BACKEND_ID='2' \
+        NEKO_BACKEND_TOKEN='ag_yyy' \
+        NEKO_GATEWAY_TYPE='surge' \
+        NEKO_GATEWAY_URL='http://127.0.0.1:9091' \
+        sh
+```
+
+安装完成后，使用 `nekoagent` 管理实例：
+
+```bash
+nekoagent list               # 列出所有实例
+nekoagent status <instance>  # 查看运行状态
+nekoagent logs <instance>    # 实时日志
+nekoagent restart <instance> # 重启
+nekoagent update <instance>  # 更新到最新版
+```
+
+> 脚本会自动检测已有安装，若已存在则只添加新实例而不重新下载二进制。
+> 同一主机可同时运行多个实例（不同 `NEKO_INSTANCE_NAME`），对应不同网关。
+
+### Agent 文档
+
+- [总览](./docs/agent/overview.md)：架构说明、直连 vs Agent 对比、安全模型
+- [快速开始](./docs/agent/quick-start.md)：从 UI 到运行的完整步骤
+- [安装指南](./docs/agent/install.md)：安装方式、systemd / launchd / OpenWrt 开机自启
+- [参数配置](./docs/agent/config.md)：完整参数列表与示例
+- [发布流程](./docs/agent/release.md)：版本命名与兼容性策略
+- [常见问题](./docs/agent/troubleshooting.md)：常见错误与解决方法
 
 ## 📖 首次使用
 
@@ -450,13 +492,62 @@ BatchBuffer.flush()
 
 #### 步骤一：启动 ClickHouse 容器
 
-`docker-compose.yml` 内置了 ClickHouse 服务，通过 `profiles: [clickhouse]` 隔离。启动时加上 profile：
+仓库内置的 `docker-compose.yml` 已包含 ClickHouse 服务，通过 `profiles: [clickhouse]` 隔离，默认不启动。
+直接在仓库根目录执行：
 
 ```bash
 docker compose --profile clickhouse up -d
 ```
 
 > ClickHouse 数据持久化到 `./data/clickhouse`，与主应用数据分目录存储。
+
+如果你使用的是**自定义 `docker-compose.yml`**（如上方场景 A/B），需手动添加 ClickHouse 服务块：
+
+```yaml
+services:
+  neko-master:
+    # ... 你的现有配置 ...
+    environment:
+      # 在现有 environment 中追加：
+      - CH_ENABLED=${CH_ENABLED:-0}
+      - CH_HOST=${CH_HOST:-clickhouse}
+      - CH_PORT=${CH_PORT:-8123}
+      - CH_DATABASE=${CH_DATABASE:-neko_master}
+      - CH_USER=${CH_USER:-neko}
+      - CH_PASSWORD=${CH_PASSWORD:-neko_master}
+      - CH_WRITE_ENABLED=${CH_WRITE_ENABLED:-0}
+      - STATS_QUERY_SOURCE=${STATS_QUERY_SOURCE:-sqlite}
+    networks:
+      - neko-master-network
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: neko-master-clickhouse
+    restart: unless-stopped
+    profiles: ["clickhouse"]
+    ports:
+      - "${CH_EXTERNAL_HTTP_PORT:-8123}:8123"
+      - "${CH_EXTERNAL_NATIVE_PORT:-9000}:9000"
+    volumes:
+      - ./data/clickhouse:/var/lib/clickhouse
+    environment:
+      - CLICKHOUSE_DB=${CH_DATABASE:-neko_master}
+      - CLICKHOUSE_USER=${CH_USER:-neko}
+      - CLICKHOUSE_PASSWORD=${CH_PASSWORD:-neko_master}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    networks:
+      - neko-master-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8123/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  neko-master-network:
+    driver: bridge
+```
 
 #### 步骤二：配置环境变量
 
@@ -816,13 +907,13 @@ docker compose up -d
 
 如果你想快速理解系统设计与实现深度，建议按下面顺序阅读：
 
-1. **整体架构图**：端到端分层与模块职责  
-   中文：[`docs/architecture.md`](./docs/architecture.md)  
-   English: [`docs/architecture.en.md`](./docs/architecture.en.md)
+1. **整体架构图**：端到端分层与模块职责 → [docs/architecture.md](./docs/architecture.md)
 2. **数据流详解**：Clash / Surge 两条采集链路与聚合过程
 3. **数据模型与存储**：SQLite 表结构、ClickHouse Buffer 表、保留策略
 4. **实时通道设计**：`RealtimeStore` 合并策略与 WS 推送机制
 5. **ClickHouse 模块**：双写架构、健康回退、读取路由
+
+完整文档索引：[docs/README.md](./docs/README.md)
 
 > 该文档覆盖采集、聚合、缓存、实时推送与多后端管理的核心设计。
 
@@ -847,12 +938,25 @@ neko-master/
 ├── setup.sh                # 一键配置脚本
 ├── docker-start.sh         # Docker 容器启动脚本
 ├── start.sh                # 源码开发启动脚本
-├── docs/                   # 架构与设计文档
-│   ├── architecture.md     # 中文架构文档
-│   └── architecture.en.md  # 英文架构文档
+├── docs/                   # 文档（见 docs/README.md）
+│   ├── README.md           # 文档总索引（中文）
+│   ├── README.en.md        # 文档总索引（英文）
+│   ├── architecture.md     # 系统架构（中文）
+│   ├── architecture.en.md  # 系统架构（英文）
+│   ├── release-checklist.md
+│   ├── agent/              # Agent 模式文档（中英文双语）
+│   │   ├── overview.md / overview.en.md
+│   │   ├── quick-start.md / quick-start.en.md
+│   │   ├── install.md / install.en.md
+│   │   ├── config.md / config.en.md
+│   │   ├── release.md / release.en.md
+│   │   └── troubleshooting.md / troubleshooting.en.md
+│   ├── research/           # 研究报告
+│   └── dev/                # 内部开发文档
 ├── assets/                 # 预览图和图标
 ├── apps/
 │   ├── collector/          # 数据收集服务（Node.js + WebSocket）
+│   ├── agent/              # Agent 守护进程（Go）
 │   └── web/                # Next.js 前端应用
 └── packages/
     └── shared/             # 共享类型定义和工具

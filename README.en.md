@@ -21,7 +21,7 @@
   <a href="https://github.com/foru17/neko-master/blob/main/LICENSE"><img src="https://img.shields.io/github/license/foru17/neko-master?style=flat-square&color=green" alt="License"></a>
   <img src="https://img.shields.io/badge/Node.js-22-339933?style=flat-square&logo=node.js">
   <a href="https://github.com/foru17/neko-master/actions/workflows/docker-build.yml"><img src="https://img.shields.io/github/actions/workflow/status/foru17/neko-master/docker-build.yml?style=flat-square&label=Docker%20CI" alt="Docker CI"></a>
-  <a href="./docs/architecture.md"><img src="https://img.shields.io/badge/docs-architecture-0ea5e9?style=flat-square" alt="Architecture Docs"></a>
+  <a href="./docs/architecture.en.md"><img src="https://img.shields.io/badge/docs-architecture-0ea5e9?style=flat-square" alt="Architecture Docs"></a>
 </p>
 
 > [!IMPORTANT]
@@ -242,14 +242,56 @@ Open <http://localhost:3000> to configure.
 
 ## 🤖 Agent Deployment
 
-Use Agent mode when you want one centralized Neko Master service and multiple remote devices collecting local gateway data.
+Use Agent mode when you want one centralized Neko Master service and multiple remote devices (OpenWrt, Linux, macOS) collecting local gateway data. The agent runs near the gateway, pulls data, and reports to the panel — the panel never connects to the gateway directly.
 
-- Overview: `docs/agent/overview.md`
-- Quick Start: `docs/agent/quick-start.md`
-- Install: `docs/agent/install.md`
-- Config: `docs/agent/config.md`
-- Release Flow: `docs/agent/release.md`
-- Troubleshooting: `docs/agent/troubleshooting.md`
+Supported gateway types: **Clash / Mihomo** (WebSocket real-time) and **Surge v5+** (HTTP polling).
+
+### Quick Install (UI-generated command)
+
+1. In the dashboard, go to `Settings → Backends`, add an `Agent` backend, select gateway type
+2. Click **"View Agent Script"** and copy the one-line install command, then run it on the target host:
+
+```bash
+# Clash / Mihomo gateway example
+curl -fsSL https://raw.githubusercontent.com/foru17/neko-master/main/apps/agent/install.sh \
+  | env NEKO_SERVER='http://your-panel:3000' \
+        NEKO_BACKEND_ID='1' \
+        NEKO_BACKEND_TOKEN='ag_xxx' \
+        NEKO_GATEWAY_TYPE='clash' \
+        NEKO_GATEWAY_URL='http://127.0.0.1:9090' \
+        sh
+
+# Surge gateway example
+curl -fsSL https://raw.githubusercontent.com/foru17/neko-master/main/apps/agent/install.sh \
+  | env NEKO_SERVER='http://your-panel:3000' \
+        NEKO_BACKEND_ID='2' \
+        NEKO_BACKEND_TOKEN='ag_yyy' \
+        NEKO_GATEWAY_TYPE='surge' \
+        NEKO_GATEWAY_URL='http://127.0.0.1:9091' \
+        sh
+```
+
+After install, manage instances with `nekoagent`:
+
+```bash
+nekoagent list               # list all instances
+nekoagent status <instance>  # check running state
+nekoagent logs <instance>    # tail live logs
+nekoagent restart <instance> # restart
+nekoagent update <instance>  # update to latest version
+```
+
+> The script auto-detects an existing installation — if `neko-agent` is already present, it only adds the new instance without re-downloading.
+> Multiple instances can run on the same host (different `NEKO_INSTANCE_NAME`), each pointing to a different gateway.
+
+### Agent Documentation
+
+- [Overview](./docs/agent/overview.en.md): architecture, Direct vs Agent comparison, security model
+- [Quick Start](./docs/agent/quick-start.en.md): end-to-end setup from UI to running agent
+- [Install Guide](./docs/agent/install.en.md): install methods, systemd / launchd autostart
+- [Configuration](./docs/agent/config.en.md): full flag and env variable reference
+- [Release Flow](./docs/agent/release.en.md): versioning and compatibility policy
+- [Troubleshooting](./docs/agent/troubleshooting.en.md): common errors and fixes
 
 ## 📖 First Use
 
@@ -459,13 +501,63 @@ Read source is controlled by `STATS_QUERY_SOURCE` (default: `sqlite`).
 
 #### Step 1: Start the ClickHouse container
 
-The `docker-compose.yml` includes a ClickHouse service gated by `profiles: [clickhouse]`:
+The repository's built-in `docker-compose.yml` already includes a ClickHouse service, gated by
+`profiles: [clickhouse]` so it does not start by default. From the repository root, run:
 
 ```bash
 docker compose --profile clickhouse up -d
 ```
 
 > ClickHouse data is persisted to `./data/clickhouse`, separate from the main app data directory.
+
+If you use a **custom `docker-compose.yml`** (such as Scenario A/B above), add the ClickHouse
+service block manually:
+
+```yaml
+services:
+  neko-master:
+    # ... your existing config ...
+    environment:
+      # append to existing environment section:
+      - CH_ENABLED=${CH_ENABLED:-0}
+      - CH_HOST=${CH_HOST:-clickhouse}
+      - CH_PORT=${CH_PORT:-8123}
+      - CH_DATABASE=${CH_DATABASE:-neko_master}
+      - CH_USER=${CH_USER:-neko}
+      - CH_PASSWORD=${CH_PASSWORD:-neko_master}
+      - CH_WRITE_ENABLED=${CH_WRITE_ENABLED:-0}
+      - STATS_QUERY_SOURCE=${STATS_QUERY_SOURCE:-sqlite}
+    networks:
+      - neko-master-network
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: neko-master-clickhouse
+    restart: unless-stopped
+    profiles: ["clickhouse"]
+    ports:
+      - "${CH_EXTERNAL_HTTP_PORT:-8123}:8123"
+      - "${CH_EXTERNAL_NATIVE_PORT:-9000}:9000"
+    volumes:
+      - ./data/clickhouse:/var/lib/clickhouse
+    environment:
+      - CLICKHOUSE_DB=${CH_DATABASE:-neko_master}
+      - CLICKHOUSE_USER=${CH_USER:-neko}
+      - CLICKHOUSE_PASSWORD=${CH_PASSWORD:-neko_master}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    networks:
+      - neko-master-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8123/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  neko-master-network:
+    driver: bridge
+```
 
 #### Step 2: Configure environment variables
 
@@ -825,13 +917,13 @@ docker compose up -d
 
 If you want to quickly understand the system design depth, read in this order:
 
-1. **System Architecture Diagram**: end-to-end layering and module responsibilities  
-   Chinese: [`docs/architecture.md`](./docs/architecture.md)  
-   English: [`docs/architecture.en.md`](./docs/architecture.en.md)
+1. **System Architecture Diagram**: end-to-end layering and module responsibilities → [docs/architecture.en.md](./docs/architecture.en.md)
 2. **Data Flow**: Clash / Surge collection pipelines and aggregation
 3. **Data Model & Storage**: SQLite schema, ClickHouse Buffer tables, retention policy
 4. **Realtime Channel Design**: `RealtimeStore` merge strategy and WS push
 5. **ClickHouse Module**: dual-write architecture, health fallback, read routing
+
+Full documentation index: [docs/README.en.md](./docs/README.en.md)
 
 > This documentation covers the core design of collection, aggregation, caching, realtime push, and multi-backend management.
 
@@ -856,12 +948,25 @@ neko-master/
 ├── setup.sh                # One-click setup script
 ├── docker-start.sh         # Docker container startup script
 ├── start.sh                # Source code dev startup script
-├── docs/                   # Architecture and design docs
-│   ├── architecture.md     # Chinese architecture docs
-│   └── architecture.en.md  # English architecture docs
+├── docs/                   # Documentation (see docs/README.en.md)
+│   ├── README.md           # Documentation index (Chinese)
+│   ├── README.en.md        # Documentation index (English)
+│   ├── architecture.md     # System architecture (Chinese)
+│   ├── architecture.en.md  # System architecture (English)
+│   ├── release-checklist.md
+│   ├── agent/              # Agent docs (bilingual)
+│   │   ├── overview.md / overview.en.md
+│   │   ├── quick-start.md / quick-start.en.md
+│   │   ├── install.md / install.en.md
+│   │   ├── config.md / config.en.md
+│   │   ├── release.md / release.en.md
+│   │   └── troubleshooting.md / troubleshooting.en.md
+│   ├── research/           # Research reports
+│   └── dev/                # Internal development docs
 ├── assets/                 # Screenshots and icons
 ├── apps/
 │   ├── collector/          # Data collection service (Node.js + WebSocket)
+│   ├── agent/              # Agent daemon (Go)
 │   └── web/                # Next.js frontend app
 └── packages/
     └── shared/             # Shared types and utilities

@@ -1,38 +1,35 @@
-# Documentation Index
+# 文档索引
 
-## Architecture
+**中文 | [English](./README.en.md)**
 
-- Chinese: `docs/architecture.md`
-- English: `docs/architecture.en.md`
-- ClickHouse Refactor Plan: `docs/clickhouse-refactor-plan.md`
+## 架构
+
+- [系统架构](./architecture.md) — 端到端架构、数据流、模块设计、ClickHouse 集成
+- [发布清单](./release-checklist.md) — 版本发布操作步骤
 
 ## Agent
 
-- Index: `docs/agent/README.md`
-- Overview: `docs/agent/overview.md`
-- Quick Start: `docs/agent/quick-start.md`
-- Install: `docs/agent/install.md`
-- Config: `docs/agent/config.md`
-- Release: `docs/agent/release.md`
-- Troubleshooting: `docs/agent/troubleshooting.md`
+- [文档总览](./agent/README.md) — Agent 文档导航
+- [架构说明](./agent/overview.md) — 工作原理、直连 vs Agent 模式对比、安全模型
+- [快速开始](./agent/quick-start.md) — 从 UI 到运行的完整步骤
+- [安装指南](./agent/install.md) — 脚本安装、systemd / launchd / OpenWrt 开机自启
+- [参数配置](./agent/config.md) — 完整运行时参数列表与示例
+- [发布流程](./agent/release.md) — 版本命名规范与 CI/CD 流程
+- [常见问题](./agent/troubleshooting.md) — 常见错误与解决方法
 
-## Release
+## 研究报告
 
-- Checklist: `docs/release-checklist.md`
+- [Kimi 2.5](./research/kimi2.5.zh.md) / [English](./research/kimi2.5.en.md)
+- [GPT-5.3](./research/GPT5.3.zh.md) / [English](./research/GPT5.3.en.md)
+- [GLM-5](./research/glm5.zh.md) / [English](./research/glm5.en.md)
 
-## Research Reports
+## 内部开发文档
 
-### Kimi 2.5
+> 以下为开发过程中的内部分析与计划文档，不面向最终用户。
 
-- Chinese: `docs/research-kimi2.5.zh.md`
-- English: `docs/research-kimi2.5.en.md`
-
-### GPT-5.3
-
-- Chinese: `docs/research-GPT5.3.zh.md`
-- English: `docs/research-GPT5.3.en.md`
-
-### GLM-5
-
-- Chinese: `docs/research-glm5.zh.md`
-- English: `docs/research-glm5.en.md`
+- [ClickHouse 数据流分析](./dev/clickhouse-dataflow-analysis.md)
+- [ClickHouse 数据流分析报告](./dev/clickhouse-dataflow-analysis-report.md)
+- [ClickHouse 迁移 I/O 分析](./dev/clickhouse-migration-io-analysis.md)
+- [ClickHouse 重构计划](./dev/clickhouse-refactor-plan.md)
+- [ClickHouse 评审报告](./dev/clickhouse-review-report.md)
+- [refactor/clickhouse 分支评审](./dev/review-refactor-clickhouse-branch.md)

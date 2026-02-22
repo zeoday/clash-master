@@ -233,6 +233,98 @@
 
 ---
 
+## Agent Mode Architecture
+
+Agent mode allows a centralized Neko Master panel to receive data from remote LAN gateways
+without requiring direct collector-to-gateway network access.
+
+### Components
+
+| Component | Description |
+|---|---|
+| `neko-agent` | Data collection daemon — runs near the gateway, pulls data and reports to panel |
+| `nekoagent` | CLI manager (shell script) — manages `neko-agent` instance lifecycle |
+
+### Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Central Panel (Neko Master)                   │
+│                                                                   │
+│  Fastify API Server                                               │
+│  ├─ POST /api/agent/report       ← receive batch traffic deltas  │
+│  ├─ POST /api/agent/heartbeat    ← receive heartbeat (online)    │
+│  ├─ POST /api/agent/config-sync  ← receive rules/proxies config  │
+│  └─ POST /api/agent/policy-state ← receive current policy state  │
+│                                                                   │
+│  Backend type: agent://, system-generated token, bound to agentId│
+└─────────────────────────────────────────────────────────────────┘
+                              ↑
+                     HTTP (token auth)
+                              │
+┌─────────────────────────────────────────────────────────────────┐
+│                   Remote Host (near gateway)                      │
+│                                                                   │
+│  nekoagent (CLI manager)                                          │
+│  ├─ /etc/neko-agent/<instance>.env  (config file)                │
+│  └─ /var/run/neko-agent/<instance>.pid (PID file)                 │
+│                                                                   │
+│  neko-agent (daemon)                                              │
+│  │                                                                │
+│  ├── 1. Pull gateway data                                         │
+│  │      ├─ Clash/Mihomo: WebSocket /connections (real-time push)  │
+│  │      └─ Surge: HTTP GET /v1/requests/recent (2s poll)          │
+│  │                                                                │
+│  ├── 2. Delta calculation                                         │
+│  │      - Identify new/updated connections                        │
+│  │      - Compute upload/download deltas                          │
+│  │      - Aggregate by domain + proxy + rule                      │
+│  │                                                                │
+│  ├── 3. Batch report (every 2s)                                   │
+│  │      POST /api/agent/report                                    │
+│  │      - Up to 1000 entries/batch, queue cap 50000               │
+│  │                                                                │
+│  ├── 4. Heartbeat (every 30s)                                     │
+│  │      POST /api/agent/heartbeat                                 │
+│  │                                                                │
+│  ├── 5. Config sync (every 2min, MD5 dedup)                       │
+│  │      POST /api/agent/config-sync                               │
+│  │      - rules / proxies / providers                             │
+│  │                                                                │
+│  └── 6. Policy state sync (every 30s, only on state change)       │
+│         POST /api/agent/policy-state                              │
+│                                                                   │
+│  PID lock: only one process per backendId at a time               │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                      Local Network (LAN)
+                              │
+            ┌─────────────────────────────┐
+            │  Clash/Mihomo or Surge      │
+            │  Gateway API                │
+            └─────────────────────────────┘
+```
+
+### Direct vs Agent Mode
+
+| Dimension | Direct | Agent |
+|---|---|---|
+| Does collector connect to gateway? | ✅ Yes | ❌ No |
+| Data latency | Milliseconds (WS) | ~2s report interval |
+| Network isolation | Requires collector → gateway access | Agent initiates; no inbound needed |
+| Multi-site | Complex (VPN / tunnels) | Natively supported |
+| Security boundary | Shared gateway API token | Panel token isolated from gateway token |
+
+### Security Model
+
+- Panel generates a unique token per Agent backend
+- `agentId` is derived from the backend token: `"agent-" + sha256(token)[:16]` — stable across restarts, no manual configuration needed
+- A token is bound to one `agentId`; registering with the same token under a different `agentId` is rejected by the server
+- Token rotation immediately invalidates old agent processes (must reconfigure with new token before restarting)
+- Config sync and policy sync use MD5 dedup to skip unchanged POSTs
+
+---
+
 ## Data Flow
 
 ### 1. Clash Data Collection Flow
@@ -656,7 +748,21 @@ neko-master/
 │
 ├── docs/
 │   ├── architecture.md               # This doc (Chinese)
-│   └── architecture.en.md            # This doc (English)
+│   ├── architecture.en.md            # This doc (English)
+│   └── agent/                        # Agent mode documentation
+│       ├── overview.md               # Architecture and mode comparison
+│       ├── quick-start.md            # End-to-end quick start
+│       ├── install.md                # Install guide (systemd / launchd / OpenWrt)
+│       ├── config.md                 # Configuration reference
+│       ├── release.md                # Release and compatibility policy
+│       └── troubleshooting.md        # Common errors and fixes
+│
+├── apps/
+│   └── agent/                        # Agent daemon (Go)
+│       ├── internal/agent/           # Core logic
+│       │   └── runner.go             # Collection loop, report, heartbeat, config sync
+│       ├── install.sh                # Agent one-click install script
+│       └── nekoagent                 # CLI manager (shell script)
 │
 └── docker-compose.yml
 ```

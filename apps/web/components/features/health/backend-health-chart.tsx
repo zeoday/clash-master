@@ -250,8 +250,6 @@ export function BackendHealthChart({
     [from, to, history.points, bucketMinutes],
   );
 
-  // Debug - moved after variable definitions
-
   const refSpans = useMemo(() => buildRefSpans(resolveGapSlots(slots)), [slots]);
 
   const labelMap = useMemo(
@@ -289,7 +287,9 @@ export function BackendHealthChart({
   // ── Latency-based coloring ──────────────────────────────────────────────────
   const latencyDomainMax = useMemo(() => {
     if (!hasLatency) return null;
-    const lats = slots.filter((s) => s.latency !== null).map((s) => s.latency as number);
+    const lats = slots
+      .flatMap((s) => [s.gateway_latency_ms, s.server_latency_ms])
+      .filter((v): v is number => v !== null && Number.isFinite(v));
     if (lats.length === 0) return null;
     return niceLatencyMax(Math.max(...lats));
   }, [hasLatency, slots]);
@@ -298,7 +298,9 @@ export function BackendHealthChart({
   const latencyTier: LatencyTier = getLatencyTier(stats.maxLatency);
   const gatewayStrokeColor = TIER_STROKE[latencyTier];
   const serverStrokeColor = "#3b82f6";
-  const strokeColor = hasGatewayLatency ? gatewayStrokeColor : serverStrokeColor;
+  const strokeColor = hasLatency
+    ? (hasGatewayLatency ? gatewayStrokeColor : serverStrokeColor)
+    : "#10b981";
 
 
 
@@ -357,24 +359,21 @@ export function BackendHealthChart({
             ? "text-rose-500"
             : "text-slate-400";
 
-      const gatewayLatencyTier = getLatencyTier(slot.gateway_latency_ms);
-      const serverLatencyTier = getLatencyTier(slot.server_latency_ms);
-
       return (
         <div className="bg-popover border border-border rounded-lg p-3 shadow-lg text-xs space-y-1 min-w-[130px]">
           <p className="text-muted-foreground font-medium">{tooltipTitle}</p>
           <p className={cn("font-semibold", statusClass)}>{statusLabel}</p>
           {slot.gateway_latency_ms !== null && (
-            <p className={cn("flex items-center gap-1", TIER_TEXT[gatewayLatencyTier])}>
+            <p className="flex items-center gap-1" style={{ color: gatewayStrokeColor }}>
               <Clock className="w-3 h-3" />
-              <span>Gateway:</span>
+              <span>{t("gatewayLatency")}:</span>
               <span className="tabular-nums font-medium">{slot.gateway_latency_ms}ms</span>
             </p>
           )}
           {slot.server_latency_ms !== null && (
-            <p className={cn("flex items-center gap-1", TIER_TEXT[serverLatencyTier])}>
+            <p className="flex items-center gap-1" style={{ color: serverStrokeColor }}>
               <Clock className="w-3 h-3" />
-              <span>Server:</span>
+              <span>{t("serverLatency")}:</span>
               <span className="tabular-nums font-medium">{slot.server_latency_ms}ms</span>
             </p>
           )}
@@ -386,7 +385,7 @@ export function BackendHealthChart({
         </div>
       );
     },
-    [t, spanMs],
+    [gatewayStrokeColor, serverStrokeColor, t, spanMs],
   );
 
   // ── Skeleton ───────────────────────────────────────────────────────────────
@@ -424,14 +423,14 @@ export function BackendHealthChart({
               className="inline-flex h-0.5 w-4 rounded-full"
               style={{ backgroundColor: gatewayStrokeColor }}
             />
-            <span>Gateway</span>
+            <span>{t("gatewayLatency")}</span>
           </div>
           <div className="inline-flex items-center gap-1.5">
             <span
               className="inline-flex h-0 w-4 border-t-2 border-dashed"
               style={{ borderColor: serverStrokeColor }}
             />
-            <span>Server</span>
+            <span>{t("serverLatency")}</span>
           </div>
         </div>
       )}
@@ -558,10 +557,10 @@ export function BackendHealthChart({
             />
             <Tooltip content={<CustomTooltip />} />
 
-            {/* Gateway latency curve - always show if has latency */}
+            {/* Primary curve: latency when available, otherwise online fallback */}
             <Area
               type="monotone"
-              dataKey="latency"
+              dataKey={dataKey}
               stroke={gatewayStrokeColor}
               strokeWidth={2}
               fillOpacity={1}
@@ -593,5 +592,3 @@ export function BackendHealthChart({
     </div>
   );
 }
-// Note: Removed React.memo to ensure real-time updates work correctly
-// The component will re-render when any prop changes
